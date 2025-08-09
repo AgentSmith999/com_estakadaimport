@@ -10,36 +10,9 @@ use Joomla\Database\DatabaseInterface;
 
 class ExportModel extends BaseModel
 {
-    protected $db;
-    protected $app;
-    
-    public function __construct($config = array())
-    {
-        parent::__construct($config);
-        $this->db = Factory::getContainer()->get(DatabaseInterface::class);
-        $this->app = Factory::getApplication();
-    }
+    protected $productIds = [];
 
-    /**
-     * Получает данные для экспорта
-     */
-    public function getExportData(int $profileId = 0): array
-    {
-        $user = Factory::getUser();
-        $vendorId = $this->getVendorId($user->id);
-
-        if (!$vendorId) {
-            throw new \RuntimeException('Пользователь не является продавцом', 403);
-        }
-
-        return [
-            'profiles' => $this->getProfiles(),
-            'selectedProfile' => $profileId ?: $this->getDefaultProfileId(),
-            'products' => $this->getProductsData($vendorId, $profileId)
-        ];
-    }
-
-    /**
+     /**
      * Получает ID вендора для пользователя
      */
     protected function getVendorId(int $userId): ?int
@@ -79,27 +52,6 @@ class ExportModel extends BaseModel
     }
 
     /**
-     * Получает данные товаров для экспорта
-     */
-    protected function getProductsData(int $vendorId, int $profileId): array
-    {
-        // Основные данные товаров
-        $products = $this->getProducts($vendorId);
-        $productIds = array_column($products, 'virtuemart_product_id');
-
-        // Дополнительные данные
-        return [
-            'products' => $products,
-            'names' => $this->getProductsNames($productIds),
-            'categories' => $this->getProductsCategories($productIds),
-            'manufacturers' => $this->getProductsManufacturers($productIds),
-            'prices' => $this->getProductsPrices($productIds),
-            'images' => $this->getProductsImages($productIds),
-            'custom_fields' => $this->getCustomFieldsValues($productIds, $profileId)
-        ];
-    }
-
-    /**
      * Получает основные данные товаров
      */
     protected function getProducts(int $vendorId): array
@@ -115,6 +67,58 @@ class ExportModel extends BaseModel
             ->where('p.virtuemart_vendor_id = ' . (int)$vendorId);
             
         return $this->db->setQuery($query)->loadAssocList();
+    }
+    
+
+    /**
+     * Получает данные для экспорта
+     */
+    public function getExportData(int $profileId = 0): array
+    {
+        $user = Factory::getUser();
+        $vendorId = $this->getVendorId($user->id);
+
+        if (!$vendorId) {
+            throw new \RuntimeException(Text::_('COM_ESTAKADAIMPORT_ERROR_NOT_VENDOR'), 403);
+        }
+
+        $profileId = $profileId ?: $this->getDefaultProfileId();
+        
+        // Основные данные товаров
+        $products = $this->getProducts($vendorId);
+        $this->productIds = array_column($products, 'virtuemart_product_id');
+
+        // Получаем все дополнительные данные
+        return [
+            'profiles' => $this->getProfiles(),
+            'selectedProfile' => $profileId,
+            'products' => $products,
+            'names' => $this->getProductsNames(),
+            'categories' => $this->getProductsCategories(),
+            'manufacturers' => $this->getProductsManufacturers(),
+            'prices' => $this->getProductsPrices(),
+            'images' => $this->getProductsImages(),
+            'customFields' => $this->getCustomFields($profileId),
+            'universalFields' => $this->getUniversalFields(),
+            'customValues' => $this->getAllCustomFieldsValues(),
+            'fixedHeaders' => $this->getFixedHeaders()
+        ];
+    }
+
+    /**
+     * Фиксированные заголовки таблицы
+     */
+    protected function getFixedHeaders(): array
+    {
+        return [
+            'Категория (Номер/ID/Название)',
+            'Производитель',
+            'Артикул',
+            'Наименование товара',
+            'Цена',
+            'Модификатор цены',
+            'Изображение'
+        ];
     }
 
     /**
@@ -210,50 +214,111 @@ class ExportModel extends BaseModel
     }
 
     /**
-     * Получает значения кастомных полей
+     * Получает кастомные поля для профиля
      */
-    protected function getCustomFieldsValues(array $productIds, int $profileId): array
-    {
-        if (empty($productIds)) return [];
-
-        // Получаем ID кастомных полей для профиля
-        $customFields = $this->getProfileCustomFields($profileId);
-        $customFieldIds = array_column($customFields, 'virtuemart_custom_id');
-
-        if (empty($customFieldIds)) return [];
-
-        $query = $this->db->getQuery(true)
-            ->select([
-                'virtuemart_product_id',
-                'virtuemart_custom_id',
-                'customfield_value'
-            ])
-            ->from('#__virtuemart_product_customfields')
-            ->where('virtuemart_product_id IN (' . implode(',', $productIds) . ')')
-            ->where('virtuemart_custom_id IN (' . implode(',', $customFieldIds) . ')');
-            
-        $results = $this->db->setQuery($query)->loadObjectList();
-        
-        // Группируем по product_id => [custom_id => value]
-        $grouped = [];
-        foreach ($results as $row) {
-            $grouped[$row->virtuemart_product_id][$row->virtuemart_custom_id] = $row->customfield_value;
-        }
-        
-        return $grouped;
-    }
-
-    /**
-     * Получает кастомные поля профиля
-     */
-    protected function getProfileCustomFields(int $profileId): array
+    protected function getCustomFields(int $profileId): array
     {
         $query = $this->db->getQuery(true)
-            ->select(['virtuemart_custom_id', 'custom_title'])
+            ->select(['virtuemart_custom_id', 'custom_title', 'field_type'])
             ->from('#__virtuemart_customs')
             ->where('custom_parent_id = ' . (int)$profileId);
             
         return $this->db->setQuery($query)->loadObjectList();
+    }
+
+    /**
+     * Получает универсальные кастомные поля
+     */
+    protected function getUniversalFields(): array
+    {
+        $query = $this->db->getQuery(true)
+            ->select(['virtuemart_custom_id', 'custom_title', 'field_type'])
+            ->from('#__virtuemart_customs')
+            ->where('custom_parent_id = 0')
+            ->where('field_type IN (' . $this->db->quote('S') . ',' . $this->db->quote('E') . ')');
+            
+        return $this->db->setQuery($query)->loadObjectList();
+    }
+
+    /**
+     * Получает значения всех кастомных полей
+     */
+    protected function getAllCustomFieldsValues(): array
+    {
+        if (empty($this->productIds)) {
+            return [];
+        }
+
+        // Получаем ID всех кастомных полей (обычные + универсальные)
+        $customFields = array_merge(
+            $this->getCustomFields($this->getDefaultProfileId()),
+            $this->getUniversalFields()
+        );
+        
+        $customIds = array_column($customFields, 'virtuemart_custom_id');
+        $pluginFields = array_filter($customFields, fn($f) => $f->field_type === 'E');
+
+        $query = $this->db->getQuery(true)
+            ->select(['virtuemart_product_id', 'virtuemart_custom_id', 'customfield_value'])
+            ->from('#__virtuemart_product_customfields')
+            ->where('virtuemart_product_id IN (' . implode(',', $this->productIds) . ')')
+            ->where('virtuemart_custom_id IN (' . implode(',', $customIds) . ')');
+            
+        $results = $this->db->setQuery($query)->loadObjectList();
+
+        // Группируем данные
+        $grouped = [];
+        foreach ($results as $row) {
+            $productId = $row->virtuemart_product_id;
+            $fieldId = $row->virtuemart_custom_id;
+            
+            if (!isset($grouped[$productId])) {
+                $grouped[$productId] = [];
+            }
+
+            // Для плагинных полей (тип E) собираем массив значений
+            if (isset($pluginFields[$fieldId])) {
+                if (!isset($grouped[$productId][$fieldId])) {
+                    $grouped[$productId][$fieldId] = [];
+                }
+                $grouped[$productId][$fieldId][] = $row->customfield_value;
+            } else {
+                $grouped[$productId][$fieldId] = $row->customfield_value;
+            }
+        }
+
+        // Объединяем множественные значения для плагинных полей
+        foreach ($grouped as &$productValues) {
+            foreach ($productValues as $fieldId => &$value) {
+                if (isset($pluginFields[$fieldId]) && is_array($value)) {
+                    $value = implode('|', $value);
+                }
+            }
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * Форматирует изображения для вывода
+     */
+    public function formatImages(array $images): string
+    {
+        if (empty($images)) {
+            return Text::_('COM_ESTAKADAIMPORT_NO_IMAGES');
+        }
+
+        $baseUrl = Uri::root();
+        $links = [];
+        
+        foreach ($images as $img) {
+            $cleanPath = ltrim($img, '/');
+            $fullUrl = $baseUrl . $cleanPath;
+            $links[] = '<a href="' . htmlspecialchars($fullUrl) . '" target="_blank">'
+                     . htmlspecialchars(basename($img)) . '</a>';
+        }
+        
+        return implode(' | ', $links);
     }
 
     /**
