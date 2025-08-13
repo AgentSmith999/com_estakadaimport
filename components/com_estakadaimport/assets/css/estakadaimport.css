@@ -1,0 +1,17 @@
+/* Стили для формы импорта */
+.com-estakadaimport-import {
+    max-width: 800px;
+    margin: 20px auto;
+    padding: 20px;
+    background: #f9f9f9;
+    border-radius: 5px;
+}
+
+.com-estakadaimport-import .alert {
+    margin-top: 15px;
+}
+
+/* Стили для кнопок */
+.com-estakadaimport-import .btn-primary {
+    background: #2e5cb8;
+}

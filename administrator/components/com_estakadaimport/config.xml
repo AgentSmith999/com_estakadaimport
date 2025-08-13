@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<config>
+    <fieldset name="basic" label="COM_ESTAKADAIMPORT_SETTINGS">
+        <field
+            name="default_vendor_id"
+            type="number"
+            label="COM_ESTAKADAIMPORT_DEFAULT_VENDOR"
+            default="1"
+        />
+        <field
+            name="import_max_filesize"
+            type="number"
+            label="COM_ESTAKADAIMPORT_MAX_FILESIZE_MB"
+            default="10"
+        />
+    </fieldset>
+</config>

@@ -42,4 +42,17 @@ class HtmlView extends BaseHtmlView
             $this->$key = $value;
         }
     }
+
+        public function display($tpl = null)
+    {
+        // Подключаем CSS
+        $wa = $this->document->getWebAssetManager();
+        $wa->registerAndUseStyle(
+            'com_estakadaimport.styles', 
+            'components/com_estakadaimport/assets/css/estakadaimport.css'
+        );
+        
+        parent::display($tpl);
+    }
+
 }
