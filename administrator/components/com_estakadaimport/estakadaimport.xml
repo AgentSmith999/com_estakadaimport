@@ -1,25 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <extension type="component" version="5.0" method="upgrade">
     <name>Estakada Import</name>
+    <namespace path="src">Joomla\Component\Estakadaimport</namespace>
     <version>1.0.0</version>
     <description>Импорт товаров в VirtueMart</description>
-    
     <scriptfile>script.php</scriptfile>
-    
-    <files folder="administrator/components/com_estakadaimport">
-        <folder>services</folder>
+
+    <!-- Файлы фронтенда -->
+    <files folder="site">
+        <folder>assets</folder>
+        <folder>helpers</folder>
+        <folder>src</folder>
+        <folder>tmpl</folder>
+        <filename>estakadaimport.php</filename>
     </files>
-    
+
+    <!-- Медиа-ресурсы (CSS/JS/изображения) -->
+    <media folder="media/com_estakadaimport" destination="com_estakadaimport">
+        <folder>css</folder>
+        <folder>js</folder>
+        <folder>images</folder>
+    </media>
+
+    <!-- Административная часть -->
     <administration>
         <menu>Estakada Import</menu>
         <submenu>
             <menu task="import" img="icon-upload">Импорт товаров</menu>
             <menu task="export" img="icon-download">Экспорт товаров</menu>
         </submenu>
+        
         <files folder="administrator/components/com_estakadaimport">
+            <folder>services</folder>
             <filename>config.xml</filename>
+            <filename>access.xml</filename>
         </files>
     </administration>
 </extension>
-
-
