@@ -31,5 +31,15 @@ class EstakadaimportServiceProvider implements ServiceProviderInterface
         );
 
         $container->registerServiceProvider(new \Joomla\Component\Estakadaimport\Site\Service\Provider\ComponentServiceProvider());
+
+        // Добавьте обработчик для меню
+        $container->set(
+            \Joomla\CMS\Menu\MenuInterface::class,
+            function (Container $container) {
+                $menu = new \Joomla\CMS\Menu\Menu();
+                \Joomla\Component\Estakadaimport\Site\Service\Menu::addItems($menu);
+                return $menu;
+            }
+        );
     }
 }
