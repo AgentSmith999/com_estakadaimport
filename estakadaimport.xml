@@ -15,13 +15,6 @@
         <filename>estakadaimport.php</filename>
     </files>
 
-    <!-- Медиа-ресурсы (CSS/JS/изображения) -->
-    <media folder="media/com_estakadaimport" destination="com_estakadaimport">
-        <folder>css</folder>
-        <folder>js</folder>
-        <folder>images</folder>
-    </media>
-
     <!-- Административная часть -->
     <administration>
         <menu>Estakada Import</menu>
