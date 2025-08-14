@@ -1,39 +1,33 @@
 <?php
 defined('_JEXEC') or die;
 
-use Joomla\CMS\Dispatcher\ComponentDispatcherFactoryInterface;
-use Joomla\CMS\Extension\ComponentInterface;
-use Joomla\CMS\Extension\Service\Provider\ComponentDispatcherFactory;
-use Joomla\CMS\Extension\Service\Provider\MVCFactory;
-use Joomla\CMS\MVC\Factory\MVCFactoryInterface;
+use Joomla\CMS\Extension\Service\Provider\HelperFactory;
+use Joomla\CMS\Extension\Service\Provider\Module;
+use Joomla\CMS\Extension\Service\Provider\Router;
 use Joomla\DI\Container;
 use Joomla\DI\ServiceProviderInterface;
+use Joomla\Component\Estakadaimport\Site\Model\ExportModel;
+use Joomla\Component\Estakadaimport\Site\Model\ImportModel;
 
-return new class implements ServiceProviderInterface {
+class EstakadaimportServiceProvider implements ServiceProviderInterface
+{
     public function register(Container $container)
     {
-        $container->registerServiceProvider(new MVCFactory('\\Joomla\\Component\\Estakadaimport'));
-        $container->registerServiceProvider(new ComponentDispatcherFactory('\\Joomla\\Component\\Estakadaimport'));
+        // Регистрация моделей
+        $container->registerServiceProvider(new HelperFactory('\\Joomla\\Component\\Estakadaimport\\Site\\Helper'));
         
         $container->set(
-            ComponentInterface::class,
+            ExportModel::class,
             function (Container $container) {
-                $component = new \Joomla\Component\Estakadaimport\Administrator\Extension\EstakadaimportComponent(
-                    $container->get(ComponentDispatcherFactoryInterface::class)
-                );
-                $component->setMVCFactory($container->get(MVCFactoryInterface::class));
-                return $component;
+                return new ExportModel();
             }
         );
         
-        // Регистрация моделей
         $container->set(
-            'EstakadaimportModelImport',
+            ImportModel::class,
             function (Container $container) {
-                return new \Joomla\Component\Estakadaimport\Site\Model\ImportModel(
-                    $container->get(MVCFactoryInterface::class)
-                );
+                return new ImportModel();
             }
         );
     }
-};
+}
