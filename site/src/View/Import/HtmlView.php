@@ -36,6 +36,13 @@ class HtmlView extends BaseHtmlView
             throw new \Exception(implode("\n", $errors), 500);
         }
 
+        // Подключаем CSS
+        $wa = $this->document->getWebAssetManager();
+        $wa->registerAndUseStyle(
+            'com_estakadaimport.styles', 
+            'components/com_estakadaimport/assets/css/estakadaimport.css'
+        );
+
         parent::display($tpl);
     }
 
@@ -55,17 +62,5 @@ class HtmlView extends BaseHtmlView
     {
         ToolbarHelper::title('Импорт товаров', 'upload');
         ToolbarHelper::custom('import.upload', 'upload', '', 'Импортировать', false);
-    }
-
-    public function display($tpl = null)
-    {
-        // Подключаем CSS
-        $wa = $this->document->getWebAssetManager();
-        $wa->registerAndUseStyle(
-            'com_estakadaimport.styles', 
-            'components/com_estakadaimport/assets/css/estakadaimport.css'
-        );
-        
-        parent::display($tpl);
     }
 }

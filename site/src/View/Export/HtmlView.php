@@ -28,6 +28,13 @@ class HtmlView extends BaseHtmlView
         if (count($errors = $this->get('Errors'))) {
             throw new \Exception(implode("\n", $errors), 500);
         }
+
+        // Подключаем CSS
+        $wa = $this->document->getWebAssetManager();
+        $wa->registerAndUseStyle(
+            'com_estakadaimport.styles', 
+            'components/com_estakadaimport/assets/css/estakadaimport.css'
+        );
         
         parent::display($tpl);
     }
@@ -42,17 +49,4 @@ class HtmlView extends BaseHtmlView
             $this->$key = $value;
         }
     }
-
-        public function display($tpl = null)
-    {
-        // Подключаем CSS
-        $wa = $this->document->getWebAssetManager();
-        $wa->registerAndUseStyle(
-            'com_estakadaimport.styles', 
-            'components/com_estakadaimport/assets/css/estakadaimport.css'
-        );
-        
-        parent::display($tpl);
-    }
-
 }

@@ -29,5 +29,7 @@ class EstakadaimportServiceProvider implements ServiceProviderInterface
                 return new ImportModel();
             }
         );
+
+        $container->registerServiceProvider(new \Joomla\Component\Estakadaimport\Site\Service\Provider\ComponentServiceProvider());
     }
 }
