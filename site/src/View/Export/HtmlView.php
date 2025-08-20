@@ -16,34 +16,30 @@ class HtmlView extends BaseHtmlView
     {
         // Получаем данные из модели
         $this->setDocumentTitle('Экспорт данных');
-
-        // Получаем модель
         $model = $this->getModel();
+        $app = Factory::getApplication();
 
-        // Получаем профиль из запроса
-        $profileId = Factory::getApplication()->input->getInt('export_profile', 0);
+        // Получаем и сразу сохраняем в свойства
+        $profileId = $app->input->getInt('export_profile', 0);
+        $selectedManufacturer = $app->input->getInt('manufacturer', 0);
+        $selectedCategory = $app->input->getInt('category', 0);
         
-        // Получаем ВСЕ данные для экспорта
-        $data = $model->getDisplayData($profileId);
+        // Получаем данные с фильтрацией
+        $data = $model->getDisplayData($profileId, $selectedManufacturer, $selectedCategory);
 
-
-        
-        // Передаем все данные в шаблон
+        // Передаем данные в свойства View для шаблона
         $this->profiles = $data['profiles'] ?? [];
-        $this->selectedProfile = $data['selectedProfile'] ?? 0;
+        $this->availableManufacturers = $data['availableManufacturers'] ?? [];
+        $this->availableCategories = $data['availableCategories'] ?? [];
+        $this->selectedProfile = $profileId; // ← Передаем в свойство
+        $this->selectedManufacturer = $selectedManufacturer; // ← Передаем в свойство
+
         $this->items = $data['products'] ?? [];
         $this->product_ids = array_column($data['products'] ?? [], 'virtuemart_product_id');
         
         // Передаем остальные необходимые переменные
         $this->fixed_headers = $data['fixedHeaders'] ?? [];
         $this->product_categories = $data['categories'] ?? [];
-
-
-
-
-
-
-
         $this->product_manufacturers = $data['manufacturers'] ?? [];
         $this->product_names = $data['names'] ?? [];
         $this->product_prices = $data['prices'] ?? [];
@@ -54,8 +50,6 @@ class HtmlView extends BaseHtmlView
         $this->universal_custom_titles = array_column($data['universalFields'] ?? [], 'custom_title');
         $this->universal_custom_ids = array_column($data['universalFields'] ?? [], 'virtuemart_custom_id');
         
-
-
         parent::display($tpl);
     }
 }

@@ -98,53 +98,18 @@ class ExportModel extends BaseModel
             return [];
         }
     }
-        
 
-    /**
-     * Получает данные для экспорта
-     */
-    public function getDisplayData(int $profileId = 0): array
+    protected function productBelongsToManufacturer(int $productId, int $selectedManufacturer, array $data): bool
     {
-        $user = Factory::getUser();
-        $vendorId = $this->getVendorId($user->id);
-
-        if (!$vendorId) {
-            echo '<pre>No vendor found</pre>';
-            return []; // Возвращаем пустой массив вместо исключения для AJAX
+        // Если у нас есть direct mapping товар → производитель
+        if (isset($data['manufacturers'][$productId])) {
+            $productManufacturerId = $data['manufacturers'][$productId];
+            return $productManufacturerId == $selectedManufacturer;
         }
-
-
-        $profileId = $profileId ?: $this->getDefaultProfileId();
         
-        // Получаем ID товаров продавца
-        $productIds = $this->getProductIds($vendorId);
-        
-        // Основные данные товаров
-        $products = $this->getProducts($vendorId);
-
-         // Проверяем каждый метод отдельно
-    // $categories = $this->getProductsCategories($productIds);
-    // echo '<pre>Categories: '; print_r($categories); echo '</pre>';
-        
-        
-        // Получаем все дополнительные данные
-        return [
-            'profiles' => $this->getProfiles(),
-            'selectedProfile' => $profileId,
-            'products' => $products,
-            'names' => $this->getProductsNames($productIds), // Теперь передаем productIds
-            'categories' => $this->getProductsCategories($productIds),
-            'manufacturers' => $this->getProductsManufacturers($productIds),
-            'prices' => $this->getProductsPrices($productIds),
-            'images' => $this->getProductsImages($productIds),
-            'customFields' => $this->getCustomFields($profileId),
-            'universalFields' => $this->getUniversalFields(),
-            'customValues' => $this->getAllCustomFieldsValues($productIds),
-            'fixedHeaders' => $this->getFixedHeaders(),
-            'product_skus' => $this->getProductSkus($vendorId) // Новый метод для SKU
-        ];
+        return false;
     }
-
+        
     /**
      * Фиксированные заголовки таблицы
      */
@@ -337,6 +302,28 @@ class ExportModel extends BaseModel
     }
 
     /**
+     * Форматирует изображения для вывода
+     */
+    public function formatImages(array $images): string
+    {
+        if (empty($images)) {
+            return Text::_('COM_ESTAKADAIMPORT_NO_IMAGES');
+        }
+
+        $baseUrl = Uri::root();
+        $links = [];
+        
+        foreach ($images as $img) {
+            $cleanPath = ltrim($img, '/');
+            $fullUrl = $baseUrl . $cleanPath;
+            $links[] = '<a href="' . htmlspecialchars($fullUrl) . '" target="_blank">'
+                     . htmlspecialchars(basename($img)) . '</a>';
+        }
+        
+        return implode(' | ', $links);
+    }
+
+    /**
      * Получает кастомные поля для профиля
      */
     protected function getCustomFields(int $profileId): array
@@ -455,26 +442,244 @@ class ExportModel extends BaseModel
     }
 
     /**
-     * Форматирует изображения для вывода
+     * Получает данные для экспорта
      */
-    public function formatImages(array $images): string
+    public function getDisplayData(int $profileId = 0, int $selectedManufacturer = 0, int $selectedCategory = 0): array
     {
-        if (empty($images)) {
-            return Text::_('COM_ESTAKADAIMPORT_NO_IMAGES');
+        $user = Factory::getUser();
+        $vendorId = $this->getVendorId($user->id);
+
+        if (!$vendorId) {
+            echo '<pre>No vendor found</pre>';
+            return []; // Возвращаем пустой массив вместо исключения для AJAX
         }
 
-        $baseUrl = Uri::root();
-        $links = [];
+
+        $profileId = $profileId ?: $this->getDefaultProfileId();
         
-        foreach ($images as $img) {
-            $cleanPath = ltrim($img, '/');
-            $fullUrl = $baseUrl . $cleanPath;
-            $links[] = '<a href="' . htmlspecialchars($fullUrl) . '" target="_blank">'
-                     . htmlspecialchars(basename($img)) . '</a>';
+        // Получаем ID товаров продавца
+        $productIds = $this->getProductIds($vendorId);
+        
+        // Основные данные товаров
+        $products = $this->getProducts($vendorId);
+
+         // Проверяем каждый метод отдельно
+    // $categories = $this->getProductsCategories($productIds);
+    // echo '<pre>Categories: '; print_r($categories); echo '</pre>';
+        
+        
+        // Получаем все дополнительные данные
+        $data = [
+            'profiles' => $this->getProfiles(),
+            'selectedProfile' => $profileId,
+            'availableManufacturers' => $this->getUniqueManufacturers(), // ← Уникальные производители для селектора
+            'availableCategories' => $this->getUniqueCategories(), // ← Уникальные категорий для селектора
+            'products' => $products,
+            'names' => $this->getProductsNames($productIds), // Теперь передаем productIds
+            'categories' => $this->getProductsCategories($productIds),
+            'manufacturers' => $this->getProductsManufacturers($productIds), // ← Привязка производителей к товарам
+            'prices' => $this->getProductsPrices($productIds),
+            'images' => $this->getProductsImages($productIds),
+            'customFields' => $this->getCustomFields($profileId),
+            'universalFields' => $this->getUniversalFields(),
+            'customValues' => $this->getAllCustomFieldsValues($productIds),
+            'fixedHeaders' => $this->getFixedHeaders(),
+            'product_skus' => $this->getProductSkus($vendorId) // Новый метод для SKU - артикулы
+        ];
+
+        // Фильтрация по производителю
+        if ($selectedManufacturer > 0) {
+            $data = $this->filterByManufacturer($data, $selectedManufacturer);
+        }
+
+        // Фильтрация по категории
+        if ($selectedCategory > 0) {
+            $data = $this->filterByCategory($data, $selectedCategory);
+        }
+
+        return $data; // ← Return после фильтрации!
+    }
+
+    /**
+     * Получает уникальные категории для текущего продавца
+     */
+    public function getUniqueCategories(): array
+    {
+        $user = Factory::getUser();
+        $vendorId = $this->getVendorId($user->id);
+        
+        if (!$vendorId) {
+            return [];
+        }
+
+        $productIds = $this->getProductIds($vendorId);
+        
+        if (empty($productIds)) {
+            return [];
+        }
+
+        $query = $this->db->getQuery(true)
+            ->select(['DISTINCT c.virtuemart_category_id', 'cl.category_name'])
+            ->from('#__virtuemart_product_categories pc')
+            ->join('INNER', '#__virtuemart_categories c ON pc.virtuemart_category_id = c.virtuemart_category_id')
+            ->join('INNER', '#__virtuemart_categories_ru_ru cl ON c.virtuemart_category_id = cl.virtuemart_category_id')
+            ->join('INNER', '#__virtuemart_products p ON pc.virtuemart_product_id = p.virtuemart_product_id')
+            ->where('pc.virtuemart_product_id IN (' . implode(',', $productIds) . ')')
+            ->where('p.virtuemart_vendor_id = ' . (int)$vendorId)
+            ->where('cl.category_name IS NOT NULL')
+            ->where('cl.category_name != ""')
+            ->order('cl.category_name ASC');
+            
+        $result = $this->db->setQuery($query)->loadAssocList();
+        
+        $availableCategories = [];
+        foreach ($result as $row) {
+            if (!empty($row['category_name'])) {
+                $availableCategories[$row['virtuemart_category_id']] = $row['category_name'];
+            }
         }
         
-        return implode(' | ', $links);
+        return $availableCategories;
     }
+
+    /**
+     * Получает уникальных производителей для текущего продавца - под фильтр селектор
+     */
+    public function getUniqueManufacturers(): array
+    {
+        $user = Factory::getUser();
+        $vendorId = $this->getVendorId($user->id);
+        
+        if (!$vendorId) {
+            return [];
+        }
+
+        $productIds = $this->getProductIds($vendorId);
+        
+        if (empty($productIds)) {
+            return [];
+        }
+
+        $query = $this->db->getQuery(true)
+            ->select(['DISTINCT m.mf_name', 'm.virtuemart_manufacturer_id'])
+            ->from('#__virtuemart_product_manufacturers pm')
+            ->join('INNER', '#__virtuemart_manufacturers_ru_ru m ON pm.virtuemart_manufacturer_id = m.virtuemart_manufacturer_id')
+            ->join('INNER', '#__virtuemart_products p ON pm.virtuemart_product_id = p.virtuemart_product_id')
+            ->where('pm.virtuemart_product_id IN (' . implode(',', $productIds) . ')')
+            ->where('p.virtuemart_vendor_id = ' . (int)$vendorId)
+            ->where('m.mf_name IS NOT NULL')
+            ->where('m.mf_name != ""')
+            ->order('m.mf_name ASC');
+            
+        $result = $this->db->setQuery($query)->loadAssocList();
+        
+        $availableManufacturers = [];
+        foreach ($result as $row) {
+            if (!empty($row['mf_name'])) {
+                $availableManufacturers[$row['virtuemart_manufacturer_id']] = $row['mf_name'];
+            }
+        }
+        
+        return $availableManufacturers;
+    }
+
+    /**
+     * Фильтрует данные по массиву ID товаров
+     */
+    protected function filterDataByProductIds(array $data, array $filteredProductIds): array
+    {
+        if (empty($filteredProductIds)) {
+            // Возвращаем пустые данные если нет товаров
+            return [
+                'profiles' => $data['profiles'] ?? [],
+                'selectedProfile' => $data['selectedProfile'] ?? 0,
+                'availableManufacturers' => $data['availableManufacturers'] ?? [],
+                'availableCategories' => $data['availableCategories'] ?? [],
+                'products' => [],
+                'names' => [],
+                'categories' => [],
+                'manufacturers' => [],
+                'prices' => [],
+                'images' => [],
+                'customFields' => $data['customFields'] ?? [],
+                'universalFields' => $data['universalFields'] ?? [],
+                'customValues' => [],
+                'fixedHeaders' => $data['fixedHeaders'] ?? [],
+                'product_skus' => []
+            ];
+        }
+        
+        // Фильтруем все массивы по ID товаров
+        $data['products'] = array_values(array_filter($data['products'], function($product) use ($filteredProductIds) {
+            return in_array($product['virtuemart_product_id'], $filteredProductIds);
+        }));
+        
+        $data['names'] = array_intersect_key($data['names'], array_flip($filteredProductIds));
+        $data['categories'] = array_intersect_key($data['categories'], array_flip($filteredProductIds));
+        $data['manufacturers'] = array_intersect_key($data['manufacturers'], array_flip($filteredProductIds));
+        $data['prices'] = array_intersect_key($data['prices'], array_flip($filteredProductIds));
+        $data['images'] = array_intersect_key($data['images'], array_flip($filteredProductIds));
+        $data['customValues'] = array_intersect_key($data['customValues'], array_flip($filteredProductIds));
+        $data['product_skus'] = array_intersect_key($data['product_skus'], array_flip($filteredProductIds));
+        
+        return $data;
+    }
+
+    /**
+     * Фильтрует данные по производителю
+     */
+    protected function filterByManufacturer(array $data, int $selectedManufacturer): array
+    {
+        if (empty($data['products']) || $selectedManufacturer <= 0) {
+            return $data;
+        }
+
+        $selectedManufacturerName = $data['availableManufacturers'][$selectedManufacturer] ?? '';
+        if (empty($selectedManufacturerName)) {
+            return $data;
+        }
+        
+        $filteredProductIds = [];
+        
+        foreach ($data['products'] as $product) {
+            $productId = $product['virtuemart_product_id'];
+            $productManufacturer = $data['manufacturers'][$productId] ?? '';
+            
+            if ($productManufacturer === $selectedManufacturerName) {
+                $filteredProductIds[] = $productId;
+            }
+        }
+        
+        return $this->filterDataByProductIds($data, $filteredProductIds);
+    }
+
+    /**
+     * Фильтрует данные по категории
+     */
+    protected function filterByCategory(array $data, int $selectedCategory): array
+    {
+        if (empty($data['products']) || $selectedCategory <= 0) {
+            return $data;
+        }
+
+        $selectedCategoryName = $data['availableCategories'][$selectedCategory] ?? '';
+        if (empty($selectedCategoryName)) {
+            return $data;
+        }
+        
+        $filteredProductIds = [];
+        
+        foreach ($data['products'] as $product) {
+            $productId = $product['virtuemart_product_id'];
+            $productCategory = $data['categories'][$productId] ?? '';
+            
+            if ($productCategory === $selectedCategoryName) {
+                $filteredProductIds[] = $productId;
+            }
+        }
+        
+        return $this->filterDataByProductIds($data, $filteredProductIds);
+    } 
 
     /**
      * Генерирует Excel файл и отправляет его в браузер

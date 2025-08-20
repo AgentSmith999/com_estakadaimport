@@ -40,6 +40,38 @@ $wa->registerAndUseScript(
             </div>
         </div>
 
+        <!-- Выбор категории -->
+        <div class="control-group mt-3">
+            <label for="category" class="control-label">Категория:</label>
+            <div class="controls">
+                <select id="category" name="category" class="form-select">
+                    <option value="0">Все категории</option>
+                    <?php foreach ($this->availableCategories as $id => $cat): ?>
+                        <option value="<?php echo $id; ?>" 
+                            <?php echo ($id == $this->selectedCategory) ? 'selected' : ''; ?>>
+                            <?php echo htmlspecialchars($cat, ENT_QUOTES, 'UTF-8'); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+        </div>
+
+        <!-- Выбор производителя -->
+        <div class="control-group mt-3">
+            <label for="manufacturer" class="control-label">Производитель:</label>
+            <div class="controls">
+                <select id="manufacturer" name="manufacturer" class="form-select">
+                    <option value="0">Все производители</option>
+                    <?php foreach ($this->availableManufacturers as $id => $brand): ?>
+                        <option value="<?php echo $id; ?>" 
+                            <?php echo ($id == $this->selectedManufacturer) ? 'selected' : ''; ?>>
+                            <?php echo htmlspecialchars($brand, ENT_QUOTES, 'UTF-8'); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+        </div>
+
         <!-- Кнопка -->
         <div class="form-actions mt-3">
             <button type="button" id="export-excel" class="btn btn-success">
@@ -71,15 +103,22 @@ $wa->registerAndUseScript(
 <script>
 jQuery(document).ready(function($) {
     // AJAX-обновление таблицы
-    $('#export_profile').change(function() {
-        const profileId = $(this).val();
-        const $container = $('#dynamic-table-container');
+    // Обработка изменения обоих селекторов
+    $('#export_profile, #manufacturer, #category').change(function() {
+        const profileId = $('#export_profile').val();
+        const manufacturerId = $('#manufacturer').val();
+        const categoryId = $('#category').val();
         
+        const $container = $('#dynamic-table-container');
         $container.html('<div class="text-center"><span class="icon-spinner icon-spin"></span> Загрузка...</div>');
         
         $.ajax({
             url: 'index.php?option=com_estakadaimport&task=export.loadTable&format=raw',
-            data: { profile: profileId },
+            data: { 
+                profile: profileId,
+                manufacturer: manufacturerId,
+                category: categoryId // ← Новый параметр
+            },
             cache: false
         })
         .done(function(html) {

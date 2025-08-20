@@ -12,7 +12,6 @@ class ExportController extends BaseController
     {
         $profileId = $this->input->getInt('export_profile', 0);
         $selectedManufacturer = $app->input->getInt('manufacturer', 0);
-        $selectedCategory = $app->input->getInt('category', 0);
         $model = $this->getModel('Export');
         
         try {
@@ -20,7 +19,7 @@ class ExportController extends BaseController
             $view->setModel($model, true);
             
             // Загружаем полные данные для первоначального отображения
-            $data = $model->getDisplayData($profileId, $selectedManufacturer, $selectedCategory);
+            $data = $model->getDisplayData($profileId, $selectedManufacturer);
             $view->data = $data;
             
             // Передаем все необходимые переменные
@@ -58,11 +57,10 @@ class ExportController extends BaseController
         $app = Factory::getApplication();
         $profileId = $app->input->getInt('profile', 0);
         $selectedManufacturer = $app->input->getInt('manufacturer', 0);
-        $selectedCategory = $app->input->getInt('category', 0);
         
         try {
             $model = $this->getModel('Export');
-            $data = $model->getDisplayData($profileId, $selectedManufacturer, $selectedCategory);
+            $data = $model->getDisplayData($profileId, $selectedManufacturer);
 
             // Очищаем буферы
             while (ob_get_level()) {
