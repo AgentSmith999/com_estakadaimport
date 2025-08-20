@@ -14,10 +14,27 @@ class ExportController extends BaseController
         $model = $this->getModel('Export');
         
         try {
-            $exportData = $model->getExportData($profileId);
             $view = $this->getView('Export', 'html');
             $view->setModel($model, true);
-            $view->data = $exportData;
+            
+            // Загружаем полные данные для первоначального отображения
+            $data = $model->getDisplayData($profileId);
+            $view->data = $data;
+            
+            // Передаем все необходимые переменные
+            $view->items = $data['products'] ?? [];
+            $view->fixed_headers = $data['fixedHeaders'] ?? [];
+            $view->product_names = $data['names'] ?? [];
+            $view->product_categories = $data['categories'] ?? [];
+            $view->product_manufacturers = $data['manufacturers'] ?? [];
+            $view->product_prices = $data['prices'] ?? [];
+            $view->product_images = $data['images'] ?? [];
+            $view->virtuemart_custom_ids = $data['customFields'] ?? [];
+            $view->universal_custom_ids = $data['universalFields'] ?? [];
+            $view->all_custom_values = $data['customValues'] ?? [];
+            $view->universal_custom_ids = $data['universalFields'] ?? [];
+            $view->product_skus = $data['product_skus'] ?? [];
+            
             $view->display();
         } catch (\Exception $e) {
             Factory::getApplication()->enqueueMessage($e->getMessage(), 'error');
@@ -30,33 +47,60 @@ class ExportController extends BaseController
      * Доступ: index.php?option=com_estakadaimport&task=export.loadTable&format=raw&profile=ID
      */
     public function loadTable()
-    {
-        // Разрешаем только AJAX-запросы
-        if (!Factory::getApplication()->input->isAjax()) {
-            throw new \RuntimeException('Доступ запрещён', 403);
+{
+    $app = Factory::getApplication();
+    $profileId = $app->input->getInt('profile', 0);
+    
+    try {
+        $model = $this->getModel('Export');
+        $data = $model->getDisplayData($profileId);
+
+        // Очищаем буферы
+        while (ob_get_level()) {
+            ob_end_clean();
         }
 
-        try {
-            $profileId = $this->input->getInt('profile', 0);
-            $model = $this->getModel('Export');
-            $exportData = $model->getExportData($profileId);
-
-            // Рендерим только таблицу
-            $view = $this->getView('Export', 'html');
-            $view->setModel($model, true);
-            $view->data = $exportData;
-            $view->setLayout('raw'); // Используем layout=raw для чистого HTML
-            
-            ob_start();
-            $view->display();
-            $html = ob_get_clean();
-
-            echo $html;
-        } catch (\Exception $e) {
-            http_response_code(500);
-            echo '<div class="alert alert-danger">' . $e->getMessage() . '</div>';
+        // Устанавливаем заголовки
+        header('Content-Type: text/html; charset=utf-8');
+        
+        // Получаем View
+        $view = $this->getView('Export', 'html');
+        $view->setLayout('default_table');
+        $view->setModel($model, true);
+        
+        // Передаем ВСЕ необходимые данные
+        $view->items = $data['products'] ?? [];
+        $view->fixed_headers = $data['fixedHeaders'] ?? [];
+        $view->product_names = $data['names'] ?? [];
+        $view->product_categories = $data['categories'] ?? [];
+        $view->product_manufacturers = $data['manufacturers'] ?? [];
+        $view->product_prices = $data['prices'] ?? [];
+        $view->product_images = $data['images'] ?? [];
+        $view->all_custom_values = $data['customValues'] ?? [];
+        $view->product_skus = $data['product_skus'] ?? [];
+        
+        // Передаем ID товаров
+        $view->product_ids = array_column($data['products'] ?? [], 'virtuemart_product_id');
+        
+        // Передаем заголовки для кастомных полей
+        $view->custom_titles = array_column($data['customFields'] ?? [], 'custom_title');
+        $view->virtuemart_custom_ids = array_column($data['customFields'] ?? [], 'virtuemart_custom_id');
+        
+        $view->universal_custom_titles = array_column($data['universalFields'] ?? [], 'custom_title');
+        $view->universal_custom_ids = array_column($data['universalFields'] ?? [], 'virtuemart_custom_id');
+        
+        // Выводим ТОЛЬКО HTML таблицы
+        echo $view->loadTemplate();
+        
+    } catch (Exception $e) {
+        // Очищаем буферы и выводим ошибку
+        while (ob_get_level()) {
+            ob_end_clean();
         }
-
-        Factory::getApplication()->close();
+        header('Content-Type: text/html; charset=utf-8');
+        echo '<div class="alert alert-danger">Ошибка: ' . $e->getMessage() . '</div>';
     }
+    
+    $app->close();
+}
 }

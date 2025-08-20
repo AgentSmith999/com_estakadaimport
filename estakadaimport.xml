@@ -10,17 +10,19 @@
         <folder>assets</folder>
         <folder>src</folder>
         <folder>tmpl</folder>
+        <filename>estakadaimport.php</filename>
     </files>
 
     <!-- Административная часть -->
     <administration>
-        <menu>Estakada Import</menu>
+        <menu img="components/com_estakadaimport/assets/images/icon.png">Estakada Import</menu>
         <submenu>
-            <menu task="import" img="icon-upload">Импорт товаров</menu>
-            <menu task="export" img="icon-download">Эспорт товаров</menu>
+            <menu link="index.php?option=com_estakadaimport&amp;view=import" img="icon-upload">Импорт товаров</menu>
+            <menu link="index.php?option=com_estakadaimport&amp;view=export" img="icon-download">Эспорт товаров</menu>
         </submenu>
         
         <files folder="admin">
+            <folder>helpers</folder>
             <folder>services</folder>
             <filename>config.xml</filename>
             <filename>access.xml</filename>

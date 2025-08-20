@@ -1,45 +1,33 @@
 <?php
+
 defined('_JEXEC') or die;
 
-use Joomla\CMS\Extension\Service\Provider\HelperFactory;
-use Joomla\CMS\Extension\Service\Provider\Module;
-use Joomla\CMS\Extension\Service\Provider\Router;
+use Joomla\CMS\Dispatcher\ComponentDispatcherFactoryInterface;
+use Joomla\CMS\Extension\ComponentInterface;
+use Joomla\CMS\Extension\MVCComponent;
+use Joomla\CMS\Extension\Service\Provider\ComponentDispatcherFactory;
+use Joomla\CMS\Extension\Service\Provider\MVCFactory;
+use Joomla\CMS\MVC\Factory\MVCFactoryInterface;
 use Joomla\DI\Container;
 use Joomla\DI\ServiceProviderInterface;
-use Joomla\Component\Estakadaimport\Site\Model\ExportModel;
-use Joomla\Component\Estakadaimport\Site\Model\ImportModel;
-
-class EstakadaimportServiceProvider implements ServiceProviderInterface
-{
+ 
+return new class implements ServiceProviderInterface {
     public function register(Container $container)
     {
-        // Регистрация моделей
-        $container->registerServiceProvider(new HelperFactory('\\Joomla\\Component\\Estakadaimport\\Site\\Helper'));
+        // Регистрируем фабрику MVC
+        $container->registerServiceProvider(new MVCFactory('\\Joomla\\Component\\Estakadaimport'));
+        
+        // Регистрируем фабрику диспетчера (новое в Joomla 5)
+        $container->registerServiceProvider(new ComponentDispatcherFactory('\\Joomla\\Component\\Estakadaimport'));
         
         $container->set(
-            ExportModel::class,
+            ComponentInterface::class,
             function (Container $container) {
-                return new ExportModel();
-            }
-        );
-        
-        $container->set(
-            ImportModel::class,
-            function (Container $container) {
-                return new ImportModel();
-            }
-        );
-
-        $container->registerServiceProvider(new \Joomla\Component\Estakadaimport\Site\Service\Provider\ComponentServiceProvider());
-
-        // Добавьте обработчик для меню
-        $container->set(
-            \Joomla\CMS\Menu\MenuInterface::class,
-            function (Container $container) {
-                $menu = new \Joomla\CMS\Menu\Menu();
-                \Joomla\Component\Estakadaimport\Site\Service\Menu::addItems($menu);
-                return $menu;
+                $component = new MVCComponent($container->get(ComponentDispatcherFactoryInterface::class));
+                $component->setMVCFactory($container->get(MVCFactoryInterface::class));
+ 
+                return $component;
             }
         );
     }
-}
+};

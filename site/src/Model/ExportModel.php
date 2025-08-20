@@ -12,6 +12,20 @@ class ExportModel extends BaseModel
 {
     protected $productIds = [];
 
+    /**
+     * @var \JDatabaseDriver Подключение к БД
+     */
+    protected $db;
+
+    /**
+     * Конструктор модели
+     */
+    public function __construct($config = [])
+    {
+        parent::__construct($config);
+        $this->db = Factory::getDbo(); // Инициализация один раз
+    }
+
      /**
      * Получает ID вендора для пользователя
      */
@@ -28,7 +42,7 @@ class ExportModel extends BaseModel
     /**
      * Получает список профилей экспорта
      */
-    protected function getProfiles(): array
+    public function getProfiles(): array
     {
         $query = $this->db->getQuery(true)
             ->select(['virtuemart_custom_id', 'custom_title'])
@@ -41,7 +55,7 @@ class ExportModel extends BaseModel
     /**
      * Получает ID профиля по умолчанию
      */
-    protected function getDefaultProfileId(): int
+    public function getDefaultProfileId(): int
     {
         $query = $this->db->getQuery(true)
             ->select('MIN(virtuemart_custom_id)')
@@ -54,54 +68,80 @@ class ExportModel extends BaseModel
     /**
      * Получает основные данные товаров
      */
+    protected function getProductIds(int $vendorId): array
+    {
+        $query = $this->db->getQuery(true)
+            ->select('virtuemart_product_id')
+            ->from('#__virtuemart_products')
+            ->where('virtuemart_vendor_id = ' . (int)$vendorId)
+            ->where('published = 1');
+            
+        return $this->db->setQuery($query)->loadColumn();
+    }
+
     protected function getProducts(int $vendorId): array
     {
         $query = $this->db->getQuery(true)
-            ->select([
-                'p.virtuemart_product_id',
-                'p.product_sku',
-                'p.product_in_stock',
-                'p.published'
-            ])
-            ->from('#__virtuemart_products p')
-            ->where('p.virtuemart_vendor_id = ' . (int)$vendorId);
-            
-        return $this->db->setQuery($query)->loadAssocList();
+            ->select('p.virtuemart_product_id, p.product_sku, l.product_name')
+            ->from('#__virtuemart_products AS p')
+            ->join('INNER', '#__virtuemart_products_ru_ru AS l ON p.virtuemart_product_id = l.virtuemart_product_id')
+            ->where('p.virtuemart_vendor_id = ' . (int)$vendorId)
+            ->where('p.published = 1');
+        
+        // Логирование запроса
+        // Factory::getApplication()->enqueueMessage($query->dump(), 'notice');
+        
+        try {
+            return $this->db->setQuery($query)->loadAssocList();
+        } catch (Exception $e) {
+            Factory::getApplication()->enqueueMessage($e->getMessage(), 'error');
+            return [];
+        }
     }
-    
+        
 
     /**
      * Получает данные для экспорта
      */
-    public function getExportData(int $profileId = 0): array
+    public function getDisplayData(int $profileId = 0): array
     {
         $user = Factory::getUser();
         $vendorId = $this->getVendorId($user->id);
 
         if (!$vendorId) {
-            throw new \RuntimeException(Text::_('COM_ESTAKADAIMPORT_ERROR_NOT_VENDOR'), 403);
+            echo '<pre>No vendor found</pre>';
+            return []; // Возвращаем пустой массив вместо исключения для AJAX
         }
+
 
         $profileId = $profileId ?: $this->getDefaultProfileId();
         
+        // Получаем ID товаров продавца
+        $productIds = $this->getProductIds($vendorId);
+        
         // Основные данные товаров
         $products = $this->getProducts($vendorId);
-        $this->productIds = array_column($products, 'virtuemart_product_id');
 
+         // Проверяем каждый метод отдельно
+    // $categories = $this->getProductsCategories($productIds);
+    // echo '<pre>Categories: '; print_r($categories); echo '</pre>';
+        
+        
         // Получаем все дополнительные данные
         return [
             'profiles' => $this->getProfiles(),
             'selectedProfile' => $profileId,
             'products' => $products,
-            'names' => $this->getProductsNames(),
-            'categories' => $this->getProductsCategories(),
-            'manufacturers' => $this->getProductsManufacturers(),
-            'prices' => $this->getProductsPrices(),
-            'images' => $this->getProductsImages(),
+            'names' => $this->getProductsNames($productIds), // Теперь передаем productIds
+            'categories' => $this->getProductsCategories($productIds),
+            'manufacturers' => $this->getProductsManufacturers($productIds),
+            'prices' => $this->getProductsPrices($productIds),
+            'images' => $this->getProductsImages($productIds),
             'customFields' => $this->getCustomFields($profileId),
             'universalFields' => $this->getUniversalFields(),
-            'customValues' => $this->getAllCustomFieldsValues(),
-            'fixedHeaders' => $this->getFixedHeaders()
+            'customValues' => $this->getAllCustomFieldsValues($productIds),
+            'fixedHeaders' => $this->getFixedHeaders(),
+            'product_skus' => $this->getProductSkus($vendorId) // Новый метод для SKU
         ];
     }
 
@@ -122,6 +162,27 @@ class ExportModel extends BaseModel
     }
 
     /**
+     * Получает артикулы товаров
+     */
+    protected function getProductSkus(int $vendorId): array
+    {
+        $query = $this->db->getQuery(true)
+            ->select(['virtuemart_product_id', 'product_sku'])
+            ->from('#__virtuemart_products')
+            ->where('virtuemart_vendor_id = ' . (int)$vendorId);
+            
+        $result = $this->db->setQuery($query)->loadAssocList('virtuemart_product_id');
+        
+        // Преобразуем в простой массив [product_id => sku]
+        $skus = [];
+        foreach ($result as $productId => $row) {
+            $skus[$productId] = $row['product_sku'] ?? '';
+        }
+        
+        return $skus;
+    }
+
+    /**
      * Получает названия товаров
      */
     protected function getProductsNames(array $productIds): array
@@ -133,7 +194,15 @@ class ExportModel extends BaseModel
             ->from('#__virtuemart_products_ru_ru')
             ->where('virtuemart_product_id IN (' . implode(',', $productIds) . ')');
             
-        return $this->db->setQuery($query)->loadAssocList('virtuemart_product_id');
+        $result = $this->db->setQuery($query)->loadAssocList('virtuemart_product_id');
+        
+        // Преобразуем в простой массив [id => name]
+        $names = [];
+        foreach ($result as $productId => $row) {
+            $names[$productId] = $row['product_name'] ?? '';
+        }
+        
+        return $names;
     }
 
     /**
@@ -144,15 +213,21 @@ class ExportModel extends BaseModel
         if (empty($productIds)) return [];
 
         $query = $this->db->getQuery(true)
-            ->select([
-                'pc.virtuemart_product_id', 
-                'c.category_name'
-            ])
-            ->from('#__virtuemart_product_categories pc')
-            ->join('LEFT', '#__virtuemart_categories_ru_ru c ON pc.virtuemart_category_id = c.virtuemart_category_id')
+            ->select(['pc.virtuemart_product_id', 'cl.category_name'])
+            ->from('#__virtuemart_product_categories AS pc')
+            ->join('INNER', '#__virtuemart_categories AS c ON pc.virtuemart_category_id = c.virtuemart_category_id')
+            ->join('INNER', '#__virtuemart_categories_ru_ru AS cl ON c.virtuemart_category_id = cl.virtuemart_category_id')
             ->where('pc.virtuemart_product_id IN (' . implode(',', $productIds) . ')');
             
-        return $this->db->setQuery($query)->loadAssocList('virtuemart_product_id');
+        $result = $this->db->setQuery($query)->loadAssocList('virtuemart_product_id');
+        
+        // Преобразуем в простой массив
+        $categories = [];
+        foreach ($result as $productId => $row) {
+            $categories[$productId] = $row['category_name'] ?? 'Без категории';
+        }
+        
+        return $categories;
     }
 
     /**
@@ -171,7 +246,15 @@ class ExportModel extends BaseModel
             ->join('LEFT', '#__virtuemart_manufacturers_ru_ru m ON pm.virtuemart_manufacturer_id = m.virtuemart_manufacturer_id')
             ->where('pm.virtuemart_product_id IN (' . implode(',', $productIds) . ')');
             
-        return $this->db->setQuery($query)->loadAssocList('virtuemart_product_id');
+        $result = $this->db->setQuery($query)->loadAssocList('virtuemart_product_id');
+        
+        // Преобразуем в простой массив [product_id => manufacturer_name]
+        $manufacturers = [];
+        foreach ($result as $productId => $row) {
+            $manufacturers[$productId] = $row['mf_name'] ?? 'Не указан';
+        }
+        
+        return $manufacturers;
     }
 
     /**
@@ -190,7 +273,38 @@ class ExportModel extends BaseModel
             ->from('#__virtuemart_product_prices')
             ->where('virtuemart_product_id IN (' . implode(',', $productIds) . ')');
             
-        return $this->db->setQuery($query)->loadAssocList('virtuemart_product_id');
+        $result = $this->db->setQuery($query)->loadAssocList('virtuemart_product_id');
+        
+        // Форматируем обе цены
+        $prices = [];
+        foreach ($result as $productId => $row) {
+            $prices[$productId] = [
+                'base' => $this->formatPrice($row['product_price'] ?? '0'),
+                'override' => $this->formatPrice($row['product_override_price'] ?? '0')
+            ];
+        }
+        
+        return $prices;
+    }
+
+    /**
+     * Форматирует цену
+     */
+    protected function formatPrice($priceValue): string
+    {
+        if (empty($priceValue) || $priceValue === '0') {
+            return '0';
+        }
+        
+        // Удаляем лишние нули и преобразуем в число
+        $price = (float)preg_replace('/^0+/', '', $priceValue);
+        
+        // Проверяем, есть ли дробная часть
+        if (floor($price) == $price) {
+            return number_format($price, 0, '.', ' ');
+        } else {
+            return number_format($price, 2, '.', ' ');
+        }
     }
 
     /**
@@ -210,7 +324,16 @@ class ExportModel extends BaseModel
             ->where('pm.virtuemart_product_id IN (' . implode(',', $productIds) . ')')
             ->group('pm.virtuemart_product_id');
             
-        return $this->db->setQuery($query)->loadAssocList('virtuemart_product_id');
+        $result = $this->db->setQuery($query)->loadAssocList('virtuemart_product_id');
+        
+        // Преобразуем в массив [product_id => array_of_images]
+        $images = [];
+        foreach ($result as $productId => $row) {
+            $imageUrls = !empty($row['images']) ? explode('|', $row['images']) : [];
+            $images[$productId] = $imageUrls;
+        }
+        
+        return $images;
     }
 
     /**
@@ -223,7 +346,19 @@ class ExportModel extends BaseModel
             ->from('#__virtuemart_customs')
             ->where('custom_parent_id = ' . (int)$profileId);
             
-        return $this->db->setQuery($query)->loadObjectList();
+        $result = $this->db->setQuery($query)->loadAssocList();
+        
+        // Преобразуем в простой массив
+        $fields = [];
+        foreach ($result as $row) {
+            $fields[] = [
+                'virtuemart_custom_id' => $row['virtuemart_custom_id'],
+                'custom_title' => $row['custom_title'],
+                'field_type' => $row['field_type']
+            ];
+        }
+        
+        return $fields;
     }
 
     /**
@@ -237,15 +372,27 @@ class ExportModel extends BaseModel
             ->where('custom_parent_id = 0')
             ->where('field_type IN (' . $this->db->quote('S') . ',' . $this->db->quote('E') . ')');
             
-        return $this->db->setQuery($query)->loadObjectList();
+        $result = $this->db->setQuery($query)->loadAssocList();
+        
+        // Преобразуем в простой массив
+        $fields = [];
+        foreach ($result as $row) {
+            $fields[] = [
+                'virtuemart_custom_id' => $row['virtuemart_custom_id'],
+                'custom_title' => $row['custom_title'],
+                'field_type' => $row['field_type']
+            ];
+        }
+        
+        return $fields;
     }
 
     /**
      * Получает значения всех кастомных полей
      */
-    protected function getAllCustomFieldsValues(): array
+    protected function getAllCustomFieldsValues(array $productIds): array
     {
-        if (empty($this->productIds)) {
+        if (empty($productIds)) {
             return [];
         }
 
@@ -256,21 +403,29 @@ class ExportModel extends BaseModel
         );
         
         $customIds = array_column($customFields, 'virtuemart_custom_id');
-        $pluginFields = array_filter($customFields, fn($f) => $f->field_type === 'E');
+        
+        // Создаем массив для идентификации плагинных полей
+        $pluginFields = [];
+        foreach ($customFields as $field) {
+            if ($field['field_type'] === 'E') {
+                $pluginFields[$field['virtuemart_custom_id']] = true;
+            }
+        }
 
         $query = $this->db->getQuery(true)
             ->select(['virtuemart_product_id', 'virtuemart_custom_id', 'customfield_value'])
             ->from('#__virtuemart_product_customfields')
-            ->where('virtuemart_product_id IN (' . implode(',', $this->productIds) . ')')
+            ->where('virtuemart_product_id IN (' . implode(',', $productIds) . ')')
             ->where('virtuemart_custom_id IN (' . implode(',', $customIds) . ')');
             
-        $results = $this->db->setQuery($query)->loadObjectList();
+        $results = $this->db->setQuery($query)->loadAssocList();
 
         // Группируем данные
         $grouped = [];
         foreach ($results as $row) {
-            $productId = $row->virtuemart_product_id;
-            $fieldId = $row->virtuemart_custom_id;
+            $productId = $row['virtuemart_product_id'];
+            $fieldId = $row['virtuemart_custom_id'];
+            $value = $row['customfield_value'];
             
             if (!isset($grouped[$productId])) {
                 $grouped[$productId] = [];
@@ -281,9 +436,9 @@ class ExportModel extends BaseModel
                 if (!isset($grouped[$productId][$fieldId])) {
                     $grouped[$productId][$fieldId] = [];
                 }
-                $grouped[$productId][$fieldId][] = $row->customfield_value;
+                $grouped[$productId][$fieldId][] = $value;
             } else {
-                $grouped[$productId][$fieldId] = $row->customfield_value;
+                $grouped[$productId][$fieldId] = $value;
             }
         }
 

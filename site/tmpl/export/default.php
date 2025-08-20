@@ -5,20 +5,20 @@ use Joomla\CMS\Factory;
 use Joomla\CMS\HTML\HTMLHelper;
 use Joomla\CMS\Router\Route;
 
+// Получаем объект документа
+$document = Factory::getDocument();
+
 // Подключаем jQuery и SheetJS
 HTMLHelper::_('jquery.framework');
-$this->document->getWebAssetManager()
-    ->registerAndUseScript(
-        'com_estakadaimport.sheetjs', 
-        'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
-        [],
-        ['async' => true]
-    );
+$wa = $document->getWebAssetManager();
+$wa->registerAndUseScript(
+    'com_estakadaimport.sheetjs', 
+    'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+    [],
+    ['async' => true]
+);
 
-// Получаем модель
-$model = $this->getModel();
-$profiles = $model->getProfiles();
-$selectedProfile = Factory::getApplication()->input->getInt('export_profile', $model->getDefaultProfileId());
+
 ?>
 
 <div class="com-estakadaimport-export">
@@ -30,18 +30,14 @@ $selectedProfile = Factory::getApplication()->input->getInt('export_profile', $m
             <label for="export_profile" class="control-label">Профиль экспорта:</label>
             <div class="controls">
                 <select id="export_profile" name="export_profile" class="form-select">
-                    <?php foreach ($profiles as $id => $title): ?>
-                        <option value="<?php echo $id; ?>" <?php echo ($id == $selectedProfile) ? 'selected' : ''; ?>>
+                    <?php foreach ($this->profiles as $id => $title): ?>
+                        <option value="<?php echo $id; ?>" 
+                            <?php echo ($id == $this->selectedProfile) ? 'selected' : ''; ?>>
                             <?php echo htmlspecialchars($title, ENT_QUOTES, 'UTF-8'); ?>
                         </option>
                     <?php endforeach; ?>
                 </select>
             </div>
-        </div>
-
-        <!-- Таблица (default_имя.php — подшаблон, который можно загрузить через loadTemplate('имя')) -->
-        <div id="dynamic-table-container" class="mt-3">
-            <?php echo $this->loadTemplate('table'); ?>
         </div>
 
         <!-- Кнопка -->
@@ -50,6 +46,22 @@ $selectedProfile = Factory::getApplication()->input->getInt('export_profile', $m
                 <span class="icon-download"></span> Экспорт в Excel
             </button>
         </div>
+
+        <br>
+        <br>
+        <br>
+
+        <!-- Таблица (default_имя.php — подшаблон, который можно загрузить через loadTemplate('имя')) -->
+        <label for="export_profile" class="form-label fw-bold">Как будет выглядить excel файл:</label>
+        <div id="dynamic-table-container" class="mt-3">
+                <?php if (empty($this->items)) : ?>
+                    <div class="alert alert-info">Загрузка данных...</div>
+                <?php else : ?>
+                    <?php echo $this->loadTemplate('table'); ?>
+                <?php endif; ?>
+        </div>
+
+
 
         <input type="hidden" name="task" value="" />
         <?php echo HTMLHelper::_('form.token'); ?>
@@ -61,15 +73,21 @@ jQuery(document).ready(function($) {
     // AJAX-обновление таблицы
     $('#export_profile').change(function() {
         const profileId = $(this).val();
+        const $container = $('#dynamic-table-container');
+        
+        $container.html('<div class="text-center"><span class="icon-spinner icon-spin"></span> Загрузка...</div>');
+        
         $.ajax({
             url: 'index.php?option=com_estakadaimport&task=export.loadTable&format=raw',
             data: { profile: profileId },
-            success: function(html) {
-                $('#dynamic-table-container').html(html);
-            },
-            error: function() {
-                $('#dynamic-table-container').html('<div class="alert alert-error">Ошибка загрузки</div>');
-            }
+            cache: false
+        })
+        .done(function(html) {
+            $container.html(html);
+        })
+        .fail(function(xhr) {
+            console.error('AJAX Error:', xhr.responseText);
+            $container.html('<div class="alert alert-danger">Ошибка загрузки</div>');
         });
     });
 
@@ -92,7 +110,7 @@ jQuery(document).ready(function($) {
                 .trim()
                 .replace(/[^a-zа-яё0-9]/gi, '_');
             
-            XLSX.writeFile(wb, `Товары_${profileName}_${new Date().toLocaleDateString('ru-RU')}.xlsx`);
+            XLSX.writeFile(wb, `Товары_${profileName}_${new Date().toLocaleDateString('ru-RU')}.xls`);
         } catch (e) {
             console.error('Ошибка экспорта:', e);
             alert('Ошибка при создании Excel-файла: ' + e.message);

@@ -25,11 +25,12 @@ class HtmlView extends BaseHtmlView
     public function display($tpl = null)
     {
         // Получаем данные из модели
-        $this->categories = $this->get('Categories');
-        $this->importResult = Factory::getApplication()->input->getString('import_result');
+        $this->setDocumentTitle('Импорт данных');
+        // $this->categories = $this->get('Categories');
+        // $this->importResult = Factory::getApplication()->input->getString('import_result');
 
         // Устанавливаем заголовок
-        $this->setDocument();
+        // $this->setDocument();
 
         // Проверяем на ошибки
         if (count($errors = $this->get('Errors'))) {
@@ -46,21 +47,4 @@ class HtmlView extends BaseHtmlView
         parent::display($tpl);
     }
 
-    /**
-     * Устанавливает мета-данные документа
-     */
-    protected function setDocument()
-    {
-        $document = Factory::getDocument();
-        $document->setTitle('Импорт товаров - ' . Factory::getConfig()->get('sitename'));
-    }
-
-    /**
-     * Добавляет кнопки тулбара (если используется административная часть)
-     */
-    protected function addToolbar()
-    {
-        ToolbarHelper::title('Импорт товаров', 'upload');
-        ToolbarHelper::custom('import.upload', 'upload', '', 'Импортировать', false);
-    }
 }

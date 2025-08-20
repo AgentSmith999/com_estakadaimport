@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+    <layout title="Импорт товаров" 
+            option="Импорт товаров">
+        <help key="Menu_Item:Estakada_Import" />
+        <message><![CDATA[Страница импорта товаров из Excel]]></message>
+    </layout>
+</metadata>

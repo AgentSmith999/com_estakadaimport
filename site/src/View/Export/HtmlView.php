@@ -4,49 +4,58 @@ namespace Joomla\Component\Estakadaimport\Site\View\Export;
 defined('_JEXEC') or die;
 
 use Joomla\CMS\MVC\View\HtmlView as BaseHtmlView;
+use Joomla\CMS\Factory;
+use Joomla\CMS\Toolbar\ToolbarHelper;
 
 class HtmlView extends BaseHtmlView
 {
-    /**
-     * Данные для экспорта
-     * @var array
-     */
-    protected $exportData = [];
+    protected $profiles = []; // @var array Профили для экспорта
+    protected $selectedProfile = 0; // @var int ID выбранного профиля
 
-    /**
-     * Метод отображения
-     */
     public function display($tpl = null)
     {
-        // 1. Получаем данные из модели
-        $this->exportData = $this->get('ExportData');
-        
-        // 2. Распаковываем данные в свойства view
-        $this->prepareData();
-        
-        // 3. Проверяем на ошибки
-        if (count($errors = $this->get('Errors'))) {
-            throw new \Exception(implode("\n", $errors), 500);
-        }
+        // Получаем данные из модели
+        $this->setDocumentTitle('Экспорт данных');
 
-        // Подключаем CSS
-        $wa = $this->document->getWebAssetManager();
-        $wa->registerAndUseStyle(
-            'com_estakadaimport.styles', 
-            'components/com_estakadaimport/assets/css/estakadaimport.css'
-        );
+        // Получаем модель
+        $model = $this->getModel();
+
+        // Получаем профиль из запроса
+        $profileId = Factory::getApplication()->input->getInt('export_profile', 0);
         
+        // Получаем ВСЕ данные для экспорта
+        $data = $model->getDisplayData($profileId);
+
+
+        
+        // Передаем все данные в шаблон
+        $this->profiles = $data['profiles'] ?? [];
+        $this->selectedProfile = $data['selectedProfile'] ?? 0;
+        $this->items = $data['products'] ?? [];
+        $this->product_ids = array_column($data['products'] ?? [], 'virtuemart_product_id');
+        
+        // Передаем остальные необходимые переменные
+        $this->fixed_headers = $data['fixedHeaders'] ?? [];
+        $this->product_categories = $data['categories'] ?? [];
+
+
+
+
+
+
+
+        $this->product_manufacturers = $data['manufacturers'] ?? [];
+        $this->product_names = $data['names'] ?? [];
+        $this->product_prices = $data['prices'] ?? [];
+        $this->product_images = $data['images'] ?? [];
+        $this->all_custom_values = $data['customValues'] ?? [];
+        $this->custom_titles = array_column($data['customFields'] ?? [], 'custom_title');
+        $this->virtuemart_custom_ids = array_column($data['customFields'] ?? [], 'virtuemart_custom_id');
+        $this->universal_custom_titles = array_column($data['universalFields'] ?? [], 'custom_title');
+        $this->universal_custom_ids = array_column($data['universalFields'] ?? [], 'virtuemart_custom_id');
+        
+
+
         parent::display($tpl);
-    }
-
-    /**
-     * Подготавливает данные для шаблона
-     */
-    protected function prepareData()
-    {
-        // Распаковываем массив в свойства объекта
-        foreach ($this->exportData as $key => $value) {
-            $this->$key = $value;
-        }
     }
 }

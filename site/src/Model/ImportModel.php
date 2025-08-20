@@ -176,8 +176,8 @@ class ImportModel extends BaseModel
     {
         return [
             'sku' => trim($row[$columnMap['product_sku']] ?? ''),
-            'name' => trim($row[$columnMap['product_name'] ?? ''),
-            'stock' => (int)($row[$columnMap['product_in_stock'] ?? 0)
+            'name' => trim($row[$columnMap['product_name']] ?? ''),
+            'stock' => (int)($row[$columnMap['product_in_stock']] ?? 0)
         ];
     }
 
