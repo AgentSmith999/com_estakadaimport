@@ -4,9 +4,13 @@ defined('_JEXEC') or die;
 use Joomla\CMS\Factory;
 use Joomla\CMS\HTML\HTMLHelper;
 use Joomla\CMS\Router\Route;
+use Joomla\CMS\Uri\Uri;
+
+HTMLHelper::_('formbehavior.chosen', 'select');
 
 // Получаем объект документа
 $document = Factory::getDocument();
+$document->addStyleSheet(Uri::root(true) . '/components/com_estakadaimport/assets/css/estakadaimport.css');
 
 // Подключаем jQuery и SheetJS
 HTMLHelper::_('jquery.framework');

@@ -1,0 +1,37 @@
+<?php
+defined('_JEXEC') or die;
+
+class EstakadaimportRouter extends JComponentRouterBase
+{
+    public function build(&$query)
+    {
+        $segments = [];
+        
+        if (isset($query['view'])) {
+            $segments[] = $query['view'];
+            unset($query['view']);
+        }
+        
+        if (isset($query['task'])) {
+            $segments[] = $query['task'];
+            unset($query['task']);
+        }
+        
+        return $segments;
+    }
+
+    public function parse(&$segments)
+    {
+        $vars = [];
+        
+        if (isset($segments[0])) {
+            $vars['view'] = $segments[0];
+        }
+        
+        if (isset($segments[1])) {
+            $vars['task'] = $segments[1];
+        }
+        
+        return $vars;
+    }
+}

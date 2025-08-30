@@ -5,10 +5,23 @@ use Joomla\CMS\Factory;
 use Joomla\CMS\HTML\HTMLHelper;
 use Joomla\CMS\Router\Route;
 use Joomla\CMS\Language\Text;
+use Joomla\CMS\Uri\Uri;
+
 
 HTMLHelper::_('formbehavior.chosen', 'select');
 
 $app = Factory::getApplication();
+
+// Подключаем CSS и JS
+$document = Factory::getDocument();
+$document->addStyleSheet(Uri::root(true) . '/components/com_estakadaimport/assets/css/estakadaimport.css');
+$document->addScript(Uri::root(true) . '/components/com_estakadaimport/assets/js/import.js');
+$document->addScript(Uri::root(true) . '/components/com_estakadaimport/assets/js/progress.js');
+
+// Используем данные из view
+$profiles = $this->profiles;
+$defaultProfileId = $this->defaultProfileId;
+
 ?>
 
 <div class="com-estakadaimport-import">
@@ -16,6 +29,22 @@ $app = Factory::getApplication();
 
     <form action="<?php echo Route::_('index.php?option=com_estakadaimport&task=import.upload'); ?>" 
           method="post" name="adminForm" id="adminForm" class="form-horizontal" enctype="multipart/form-data">
+
+        <!-- Выбор профиля -->
+        <div class="control-group">
+            <label for="import_profile" class="control-label">Профиль импорта:</label>
+            <div class="controls">
+                <select id="import_profile" name="import_profile" class="form-select">
+                    <?php foreach ($profiles as $id => $title): ?>
+                        <option value="<?php echo $id; ?>" 
+                            <?php echo ($id == $defaultProfileId) ? 'selected' : ''; ?>>
+                            <?php echo htmlspecialchars($title, ENT_QUOTES, 'UTF-8'); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <small class="text-muted">Выберите группу товаров для импорта настраиваемых полей</small>
+            </div>
+        </div>  
 
         <!-- Загрузка файла -->
         <div class="control-group mt-3">
@@ -72,8 +101,34 @@ $app = Factory::getApplication();
     </div>
 
     <div id="importComplete" style="display: none;" class="alert alert-success">
-        <h4>Импорт завершен успешно!</h4>
-        <p>Страница будет перезагружена через <span id="reloadCountdown">5</span> секунд...</p>
+        <h4>✅ Импорт завершен успешно!</h4>
+        <p>Обработано товаров: <span id="completedCount">0</span></p>
+        <p>Обработано изображений: <span id="completedImages">0</span></p>
+        <div class="mt-3">
+            <button id="reloadPage" class="btn btn-success">
+                <span class="icon-refresh"></span> Обновить страницу
+            </button>
+            <button id="newImport" class="btn btn-primary ml-2">
+                <span class="icon-plus"></span> Новый импорт
+            </button>
+        </div>
+    </div>
+
+    <!-- Блок ошибки несоответствия профиля -->
+    <div id="profileMismatchError" style="display: none;" class="alert alert-danger">
+        <h4>❌ Несоответствие профиля!</h4>
+        <p>Вы выбрали один профиль товаров, но импортируете Excel файл с заголовками для другого профиля.</p>
+        <p>Пожалуйста:</p>
+        <ul>
+            <li>Проверьте, что выбрали правильный профиль в настройках импорта</li>
+            <li>Убедитесь, что Excel файл соответствует выбранному профилю товаров</li>
+            <li>Скачайте шаблон Excel для выбранного профиля</li>
+        </ul>
+        <div class="mt-3">
+            <button id="reloadPageProfile" class="btn btn-primary">
+                <span class="icon-refresh"></span> Перезагрузить страницу
+            </button>
+        </div>
     </div>
 
     <div id="importError" style="display: none;" class="alert alert-danger">
@@ -91,224 +146,35 @@ $app = Factory::getApplication();
             <ul>
                 <li><strong>Обязательные колонки:</strong> 
                     <ul>
+                        <li>Категория (Номер/ID/Название)</li>
+                        <li>Производитель</li>
                         <li>Артикул</li>
                         <li>Наименование товара</li>
-                        <li>Категория (Номер/ID/Название)</li>
+                        <li>Цена (базовая цена)</li>
                     </ul>
                 </li>
                 <li><strong>Опциональные колонки:</strong> 
                     <ul>
+                        <li>Модификатор цены (новая цена, переопределяет базовую)</li>
                         <li>Количество на складе</li>
                         <li>Изображение</li>
                     </ul>
                 </li>
+                <li>Цены указываются в числовом формате (например: 1250.50 или 1,250.50)</li>
+                <li>Если "Модификатор цены" указан и больше 0, он заменит базовую цену</li>
                 <li>Для категорий указывайте ID существующей категории или ее точное название</li>
                 <li>Если категория не найдена, товар не будет создан/обновлен</li>
                 <li>Первая строка - заголовки колонок</li>
+                <li><strong>Кастомные поля:</strong> 
+                    <ul>
+                        <li>Добавьте колонки с названиями кастомных полей</li>
+                        <li>Выберите соответствующий профиль для импорта полей</li>
+                        <li>Поля будут автоматически сопоставлены с товарами</li>
+                    </ul>
+                </li>
                 <li>Максимальный размер: <?php echo ini_get('upload_max_filesize'); ?></li>
             </ul>
         </div>
     </div>
 </div>
 
-<script src="<?php echo JUri::root(); ?>components/com_estakadaimport/tmpl/import/progress.js"></script>
-
-<script>
-jQuery(document).ready(function($) {
-    // Глобальные переменные
-    window.importInProgress = false;
-    window.lastProgressData = null;
-    window.completionChecks = 0;
-    window.totalImages = 0;
-    window.totalRows = 0;
-        
-    // Обработка отправки формы
-    $('#adminForm').on('submit', function(e) {
-        if (window.importInProgress) {
-            e.preventDefault();
-            return false;
-        }
-        
-        const fileInput = $('#xlsfile')[0];
-        if (fileInput.files.length === 0) {
-            alert('Пожалуйста, выберите файл для импорта');
-            e.preventDefault();
-            return false;
-        }
-        
-        e.preventDefault();
-        
-        window.importInProgress = true;
-        $('#importProgress').show();
-        $('#importComplete').hide();
-        $('#importError').hide();
-        $('.progress-bar').css('width', '0%');
-        
-        // Сбрасываем счетчики
-        $('#processedCount').text('0');
-        $('#currentImage').text('Подготовка к импорту...');
-        
-        // Анализируем файл для получения реальных данных
-        analyzeFile(function(images, rows) {
-            window.totalImages = images;
-            window.totalRows = rows;
-            
-            $('#totalCount').text(images);
-            $('#rowCount').text(rows);
-            $('#totalCount2').text(images);
-            
-            // Запускаем импорт
-            startFullImport();
-        });
-    });
-    
-    // Функция для анализа файла
-    function analyzeFile(callback) {
-        const formData = new FormData();
-        formData.append('xlsfile', $('#xlsfile')[0].files[0]);
-        formData.append('task', 'import.analyzeSimple');
-        formData.append('format', 'json');
-        formData.append(Joomla.getOptions('csrf.token'), 1);
-
-        $.ajax({
-            url: window.location.origin + '/index.php?option=com_estakadaimport',
-            type: 'POST',
-            data: formData,
-            processData: false,
-            contentType: false,
-            dataType: 'json',
-            success: function(response) {
-                if (response.success) {
-                    callback(response.data.totalImages, response.data.totalRows);
-                } else {
-                    // Используем приблизительные значения
-                    const totalRows = 50;
-                    const totalImages = Math.round(totalRows * 2.4);
-                    callback(totalImages, totalRows);
-                }
-            },
-            error: function() {
-                // Используем приблизительные значения при ошибке
-                const totalRows = 50;
-                const totalImages = Math.round(totalRows * 2.4);
-                callback(totalImages, totalRows);
-            }
-        });
-    }
-    
-    // Запуск импорта
-    function startFullImport() {
-        const formData = new FormData($('#adminForm')[0]);
-        formData.append('task', 'import.fullProcess');
-        formData.append('format', 'json');
-        formData.append(Joomla.getOptions('csrf.token'), 1);
-
-        // Сбрасываем счетчики завершения
-        window.completionChecks = 0;
-        
-        // Запускаем fallback анимацию
-        startFallbackAnimation(window.totalImages);
-        
-        // Запускаем проверку реального прогресса
-        setTimeout(checkImportProgress, 1000);
-        
-        $.ajax({
-            url: window.location.origin + '/index.php?option=com_estakadaimport',
-            type: 'POST',
-            data: formData,
-            processData: false,
-            contentType: false,
-            dataType: 'json',
-            success: function(response) {
-                console.log('Import AJAX completed:', response);
-            },
-            error: function(xhr, status, error) {
-                console.error('Import AJAX error:', status, error);
-                handleImportError('Ошибка при импорте: ' + error);
-            }
-        });
-    }
-
-    // Fallback анимация
-    function startFallbackAnimation(totalImages) {
-        let current = 0;
-        window.fallbackInterval = setInterval(function() {
-            if (current < totalImages && window.importInProgress) {
-                current++;
-                const percentage = Math.round((current / totalImages) * 100);
-                
-                // Обновляем только если нет реальных данных
-                if (!window.lastProgressData || window.lastProgressData.current < current) {
-                    $('.progress-bar').css('width', percentage + '%');
-                    $('#processedCount').text(current);
-                    
-                    if (current % 5 === 0) {
-                        $('#currentImage').html('<span class="text-success">Обработка... ' + current + '/' + totalImages + '</span>');
-                    }
-                }
-            } else if (!window.importInProgress) {
-                clearInterval(window.fallbackInterval);
-            }
-        }, 100);
-    }
-    
-    $('#cancelImport').on('click', function() {
-        if (confirm('Прервать импорт?')) {
-            window.importInProgress = false;
-            if (window.fallbackInterval) {
-                clearInterval(window.fallbackInterval);
-            }
-            location.reload();
-        }
-    });
-});
-</script>
-
-<style>
-.progress { 
-    height: 25px; 
-    margin-bottom: 15px;
-}
-.import-status { 
-    font-size: 14px; 
-    background: #f8f9fa;
-    padding: 15px;
-    border-radius: 5px;
-    margin-bottom: 15px;
-}
-.import-status p { 
-    margin-bottom: 5px; 
-}
-.import-status strong {
-    color: #495057;
-}
-#currentImage {
-    font-family: monospace;
-    background: #fff;
-    padding: 5px;
-    border-radius: 3px;
-    border: 1px solid #dee2e6;
-    word-break: break-all;
-}
-.text-success { color: #28a745 !important; }
-.text-danger { color: #dc3545 !important; }
-.btn-cancel {
-    margin-top: 15px;
-}
-.import-stats {
-    display: flex;
-    gap: 20px;
-    margin-bottom: 15px;
-}
-.stat-item {
-    background: #e9ecef;
-    padding: 10px;
-    border-radius: 5px;
-    min-width: 120px;
-}
-.stat-value {
-    font-size: 18px;
-    font-weight: bold;
-    color: #007bff;
-}
-</style>

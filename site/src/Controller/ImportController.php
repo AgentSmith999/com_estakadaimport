@@ -3,12 +3,16 @@ namespace Joomla\Component\Estakadaimport\Site\Controller;
 
 defined('_JEXEC') or die;
 
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 use Joomla\CMS\MVC\Controller\BaseController;
 use Joomla\CMS\Factory;
 use Joomla\CMS\Language\Text;
 use Joomla\CMS\Router\Route;
 use Joomla\CMS\Filesystem\File;
 use Joomla\CMS\Session\Session;
+use Joomla\CMS\Log\Log;
 
 class ImportController extends BaseController
 {
@@ -29,6 +33,12 @@ class ImportController extends BaseController
         try {
             // Получаем загруженный файл
             $file = $input->files->get('xlsfile');
+
+            // Получаем ID профиля из формы
+            $profileId = $input->getInt('import_profile', 0);
+
+            // Логирование для отладки
+            Log::add('Profile ID from form: ' . $profileId, Log::DEBUG, 'com_estakadaimport');
 
             // Проверяем, что файл был загружен
             if (empty($file) || $file['error'] !== UPLOAD_ERR_OK) {
@@ -64,9 +74,14 @@ class ImportController extends BaseController
                 throw new \Exception("Не удалось сохранить загруженный файл");
             }
 
-            // Обрабатываем файл через модель
-            $model = $this->getModel('Import');
-            $result = $model->importFromExcel($filePath);
+            // Обрабатываем файл через модель с передачей profileId
+            $model = $this->getModel('import');
+
+            // УДАЛЯЕМ дублирующую проверку профиля из контроллера
+            // Проверка будет выполняться в модели importFromExcel()
+
+            // Выполняем импорт
+            $result = $model->importFromExcel($filePath, $profileId); // Передаем profileId
 
             // Удаляем временный файл
             if (file_exists($filePath)) {
@@ -74,9 +89,9 @@ class ImportController extends BaseController
             }
 
             if ($result) {
-              //  $app->enqueueMessage("Импорт успешно завершен", 'success');
+                $app->enqueueMessage("Импорт успешно завершен", 'success');
             } else {
-                $app->enqueueMessage("Импорт завершен с ошибками", 'warning');
+                // Сообщение об ошибке уже установлено в модели
             }
 
         } catch (\Exception $e) {
@@ -163,6 +178,9 @@ class ImportController extends BaseController
             
             $input = $app->input;
             $file = $input->files->get('xlsfile');
+
+            $profileId = $input->getInt('import_profile', 0);
+            Log::add('Profile ID in analyzeSimple: ' . $profileId, Log::DEBUG, 'com_estakadaimport');
             
             if (empty($file) || $file['error'] !== UPLOAD_ERR_OK) {
                 throw new \Exception('Файл не загружен');
@@ -207,6 +225,7 @@ class ImportController extends BaseController
             // Устанавливаем правильный Content-Type для JSON
             $app->setHeader('Content-Type', 'application/json', true);
             
+            // Возвращаем оригинальное сообщение об ошибке
             echo json_encode([
                 'success' => false,
                 'message' => $e->getMessage()
@@ -222,8 +241,12 @@ class ImportController extends BaseController
     public function fullProcess()
     {
         $app = Factory::getApplication();
-        error_log('EstakadaImport: fullProcess started'); // Добавьте эту строку
+        $input = $app->input;
         
+        // Логирование для отладки
+        Log::add('=== FULL PROCESS START ===', Log::DEBUG, 'com_estakadaimport');
+        Log::add('Profile ID from input: ' . $input->getInt('import_profile', 0), Log::DEBUG, 'com_estakadaimport');
+            
         try {
             // Проверяем токен
             if (!Session::checkToken()) {
@@ -232,7 +255,10 @@ class ImportController extends BaseController
             
             $input = $app->input;
             $file = $input->files->get('xlsfile');
-            
+
+            $profileId = $input->getInt('import_profile', 0);
+            Log::add('Profile ID: ' . $profileId, Log::DEBUG, 'com_estakadaimport');
+                
             if (empty($file) || $file['error'] !== UPLOAD_ERR_OK) {
                 throw new \Exception('Файл не загружен');
             }
@@ -245,9 +271,17 @@ class ImportController extends BaseController
                 throw new \Exception('Не удалось сохранить временный файл');
             }
             
-            // Выполняем импорт
+            // Выполняем импорт с передачей profileId
             $model = $this->getModel('Import');
-            $result = $model->importFromExcel($tmpFilePath);
+
+            // Проверяем существование метода
+            if (!method_exists($model, 'importFromExcel')) {
+                throw new \Exception('Метод importFromExcel не найден в модели');
+            }
+            
+            Log::add('Calling importFromExcel with profileId: ' . $profileId, Log::DEBUG, 'com_estakadaimport');
+
+            $result = $model->importFromExcel($tmpFilePath, $profileId);
             
             // Удаляем временный файл
             if (file_exists($tmpFilePath)) {
@@ -257,42 +291,44 @@ class ImportController extends BaseController
             // Устанавливаем правильный Content-Type для JSON
             $app->setHeader('Content-Type', 'application/json', true);
             
-            echo json_encode([
-                'success' => $result,
-                'message' => $result ? 'Импорт завершен успешно' : 'Ошибка импорта'
-            ]);
+            // Если импорт завершился с ошибкой, получаем конкретное сообщение
+            if ($result) {
+                $response = [
+                    'success' => true,
+                    'message' => 'Импорт завершен успешно'
+                ];
+            } else {
+                // Получаем сообщения об ошибках из сессии
+                $messages = $app->getMessageQueue();
+                $errorMessage = 'Ошибка импорта';
+                
+                foreach ($messages as $message) {
+                    if ($message['type'] === 'error') {
+                        $errorMessage = $message['message'];
+                        break;
+                    }
+                }
+                
+                $response = [
+                    'success' => false,
+                    'message' => $errorMessage
+                ];
+            }
+            
+            echo json_encode($response);
             
         } catch (\Exception $e) {
             // Устанавливаем правильный Content-Type для JSON
             $app->setHeader('Content-Type', 'application/json', true);
             
+            // Возвращаем оригинальное сообщение об ошибке
             echo json_encode([
                 'success' => false,
-                'message' => 'Ошибка: ' . $e->getMessage()
+                'message' => $e->getMessage()
             ]);
         }
         
         $app->close();
-    }
-
-    /**
-     * Упрощенный импорт для тестирования
-     */
-    protected function simpleImport($filePath, $model)
-    {
-        try {
-            // Простая имитация импорта
-            sleep(3); // Имитация обработки
-            
-            // Можно также вызвать настоящий метод, но без прогресса
-            // return $model->importFromExcel($filePath);
-            
-            return true;
-            
-        } catch (\Exception $e) {
-            error_log('Simple import error: ' . $e->getMessage());
-            return false;
-        }
     }
 
     /**
@@ -322,7 +358,7 @@ class ImportController extends BaseController
                 'timestamp' => time()
             ];
             
-            error_log('Progress debug: ' . json_encode($debugInfo));
+            Log::add('Progress debug: ' . json_encode($debugInfo), Log::DEBUG, 'com_estakadaimport');
             
             echo json_encode([
                 'success' => true,
@@ -331,7 +367,7 @@ class ImportController extends BaseController
             ]);
             
         } catch (\Exception $e) {
-            error_log('Error in getProgress: ' . $e->getMessage());
+            Log::add('Error in getProgress: ' . $e->getMessage(), Log::ERROR, 'com_estakadaimport');
             
             echo json_encode([
                 'success' => false,
@@ -355,12 +391,12 @@ class ImportController extends BaseController
                 foreach ($files as $file) {
                     if (filemtime($file) < time() - 3600) { // older than 1 hour
                         unlink($file);
-                        error_log('Cleaned up old progress file: ' . $file);
+                        Log::add('Cleaned up old progress file: ' . $file, Log::DEBUG, 'com_estakadaimport');
                     }
                 }
             }
         } catch (\Exception $e) {
-            error_log('Error cleaning up progress files: ' . $e->getMessage());
+            Log::add('Error cleaning up progress files: ' . $e->getMessage(), Log::ERROR, 'com_estakadaimport');
         }
     }
 
@@ -369,6 +405,8 @@ class ImportController extends BaseController
      */
     public function cancel()
     {
+        $app = Factory::getApplication();
+        
         try {
             $model = $this->getModel('Import');
             $model->clearImportProgress();
@@ -378,7 +416,6 @@ class ImportController extends BaseController
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
         }
         
-        $app = Factory::getApplication();
         $app->close();
     }
 }
