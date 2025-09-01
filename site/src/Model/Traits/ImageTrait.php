@@ -67,8 +67,18 @@ trait ImageTrait
     /**
      * Обработка изображений товара
      */
-    protected function processImages($imageUrls, $productId, $vendorId, $userId)
+    protected function processImages($imageUrls, $productId, $vendorId, $userId, $updatePricesOnly = false)
     {
+        // В режиме "Только обновить цены" пропускаем обработку изображений
+        if ($updatePricesOnly) {
+            Log::add(sprintf('РЕЖИМ ОБНОВЛЕНИЯ ЦЕН: пропускаем обработку изображений для товара ID: %d', $productId), Log::DEBUG, 'com_estakadaimport');
+            return;
+        }
+        
+        Log::add(sprintf('Начало обработки изображений для товара ID: %d', $productId), Log::DEBUG, 'com_estakadaimport');
+        
+        $urls = explode('|', $imageUrls);
+
         if (empty($imageUrls)) {
             // Log::add('Нет URL изображений для обработки', Log::DEBUG, 'com_estakadaimport');
             return;
@@ -170,7 +180,7 @@ trait ImageTrait
             }
         }
         
-        // Логируем пропущенные GIF-файлы
+        // Логируем пропущенные GIF-файлов
         if (!empty($skippedGifs)) {
             // Log::add(sprintf('Пропущено %d GIF-изображений для товара %d: %s', count($skippedGifs), $productId, implode(', ', $skippedGifs)), Log::WARNING, 'com_estakadaimport');
         }

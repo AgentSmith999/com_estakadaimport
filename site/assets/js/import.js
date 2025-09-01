@@ -58,13 +58,11 @@ function checkForProfileMismatch(errorMessage, responseData) {
 function handleImportError(errorMessage, responseData = null) {
     console.log('Handle import error called with:', errorMessage, responseData);
     
-    // Если импорт уже успешно завершился по данным прогресса, игнорируем ошибку AJAX
     if (window.importSuccessfullyCompleted) {
         console.log('Import already completed successfully, ignoring AJAX error');
         return;
     }
     
-    // Улучшенная проверка ошибки несоответствия профиля
     const isProfileMismatch = checkForProfileMismatch(errorMessage, responseData);
     
     if (isProfileMismatch) {
@@ -77,8 +75,9 @@ function handleImportError(errorMessage, responseData = null) {
     window.importInProgress = false;
     window.importStarted = false;
     
-    if (window.fallbackInterval) {
-        clearInterval(window.fallbackInterval);
+    // Останавливаем все интервалы через progress.js
+    if (typeof stopProgressPolling === 'function') {
+        stopProgressPolling();
     }
     
     jQuery('#importProgress').hide();
@@ -99,16 +98,15 @@ function showProfileMismatchError(errorMessage) {
     window.importInProgress = false;
     window.importStarted = false;
     
-    if (window.fallbackInterval) {
-        clearInterval(window.fallbackInterval);
+    // Останавливаем через progress.js
+    if (typeof stopProgressPolling === 'function') {
+        stopProgressPolling();
     }
     
-    // Останавливаем все анимации прогресса
     jQuery('.progress-bar').stop().css('width', '100%').addClass('bg-danger').removeClass('progress-bar-animated');
     jQuery('#currentImage').html('<span class="text-danger">Ошибка несоответствия профиля!</span>');
     jQuery('#timeRemaining').text('Прервано');
     
-    // Создаем информативное сообщение об ошибке
     const profileName = jQuery('#import_profile option:selected').text();
     const errorHtml = `
         <p><strong>Обнаружено несоответствие профиля!</strong></p>
@@ -124,7 +122,6 @@ function showProfileMismatchError(errorMessage) {
         <p class="text-muted"><small>Детали ошибки: ${errorMessage || 'Несоответствие структуры файла'}</small></p>
     `;
     
-    // Обновляем сообщение об ошибке
     jQuery('#profileMismatchError').html(`
         <h4>❌ Несоответствие профиля!</h4>
         ${errorHtml}
@@ -135,13 +132,11 @@ function showProfileMismatchError(errorMessage) {
         </div>
     `);
     
-    // Показываем блок ошибки профиля
     jQuery('#importProgress').hide();
     jQuery('#importComplete').hide();
     jQuery('#importError').hide();
     jQuery('#profileMismatchError').show();
     
-    // Обработчик кнопки перезагрузки
     jQuery('#reloadPageProfile').off('click').on('click', function() {
         location.reload();
     });
@@ -154,7 +149,13 @@ function analyzeFile(callback) {
     formData.append('import_profile', jQuery('#import_profile').val());
     formData.append('task', 'import.analyzeSimple');
     formData.append('format', 'json');
+    formData.append('update_prices_only', jQuery('#update_prices_only').is(':checked') ? '1' : '0');
     formData.append(Joomla.getOptions('csrf.token'), 1);
+
+    const selectedVendor = jQuery('#selected_vendor').val();
+    if (selectedVendor) {
+        formData.append('selected_vendor', selectedVendor);
+    }
 
     jQuery.ajax({
         url: window.location.origin + '/index.php?option=com_estakadaimport',
@@ -169,7 +170,6 @@ function analyzeFile(callback) {
             if (response.success && response.data) {
                 callback(response.data.totalImages, response.data.totalRows);
             } else {
-                // Проверяем, не является ли это ошибкой несоответствия профиля
                 if (response.message && checkForProfileMismatch(response.message, response)) {
                     handleImportError(response.message, response);
                 } else {
@@ -199,16 +199,21 @@ function startFullImport() {
     formData.append('import_profile', jQuery('#import_profile').val());
     formData.append('task', 'import.fullProcess');
     formData.append('format', 'json');
+    formData.append('update_prices_only', jQuery('#update_prices_only').is(':checked') ? '1' : '0');
     formData.append(Joomla.getOptions('csrf.token'), 1);
+
+    const selectedVendor = jQuery('#selected_vendor').val();
+    if (selectedVendor) {
+        formData.append('selected_vendor', selectedVendor);
+    }
 
     // Сбрасываем счетчики завершения
     window.completionChecks = 0;
     
-    // Запускаем fallback анимацию
-    startFallbackAnimation(window.totalImages);
-    
-    // Запускаем проверку реального прогресса
-    setTimeout(checkImportProgress, 1000);
+    // Запускаем проверку прогресса через progress.js
+    if (typeof startProgressChecking === 'function') {
+        startProgressChecking();
+    }
     
     jQuery.ajax({
         url: window.location.origin + '/index.php?option=com_estakadaimport',
@@ -220,7 +225,6 @@ function startFullImport() {
         success: function(response) {
             console.log('Import AJAX completed:', response);
             
-            // Игнорируем ошибку AJAX, если импорт уже завершился успешно
             if (response.success === false && !window.importSuccessfullyCompleted) {
                 handleImportError(response.message || 'Ошибка импорта', response);
             }
@@ -243,29 +247,6 @@ function startFullImport() {
             }
         }
     });
-}
-
-// Fallback анимация
-function startFallbackAnimation(totalImages) {
-    let current = 0;
-    window.fallbackInterval = setInterval(function() {
-        if (current < totalImages && window.importInProgress) {
-            current++;
-            const percentage = Math.round((current / totalImages) * 100);
-            
-            // Обновляем только если нет реальных данных
-            if (!window.lastProgressData || window.lastProgressData.current < current) {
-                jQuery('.progress-bar').css('width', percentage + '%');
-                jQuery('#processedCount').text(current);
-                
-                if (current % 5 === 0) {
-                    jQuery('#currentImage').html('<span class="text-success">Обработка... ' + current + '/' + totalImages + '</span>');
-                }
-            }
-        } else if (!window.importInProgress) {
-            clearInterval(window.fallbackInterval);
-        }
-    }, 100);
 }
 
 // Инициализация после загрузки DOM
@@ -311,13 +292,33 @@ document.addEventListener('DOMContentLoaded', function() {
             startFullImport();
         });
     });
+
+    // Обновить только цены
+    const updatePricesOnly = document.getElementById('update_prices_only');
+    const profileGroup = document.querySelector('.group-profile');
     
+    if (updatePricesOnly && profileGroup) {
+        // Обработчик изменения чекбокса
+        updatePricesOnly.addEventListener('change', function() {
+            if (this.checked) {
+                profileGroup.classList.add('hidden');
+            } else {
+                profileGroup.classList.remove('hidden');
+            }
+        });
+        
+        // Инициализация при загрузке
+        if (updatePricesOnly.checked) {
+            profileGroup.classList.add('hidden');
+        }
+    }
+
     // Обработчик кнопки отмены
     jQuery('#cancelImport').on('click', function() {
         if (confirm('Прервать импорт?')) {
             window.importInProgress = false;
-            if (window.fallbackInterval) {
-                clearInterval(window.fallbackInterval);
+            if (typeof stopProgressPolling === 'function') {
+                stopProgressPolling();
             }
             location.reload();
         }

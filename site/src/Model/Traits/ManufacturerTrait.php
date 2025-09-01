@@ -8,6 +8,9 @@ use Joomla\CMS\Application\ApplicationHelper;
 
 trait ManufacturerTrait
 {
+    // Используем трейт для уникальности брендов
+    use \Joomla\Component\Estakadaimport\Site\Model\Traits\UniqueBrandTrait;
+
     /**
      * Получение или создание производителя
      */
@@ -19,18 +22,18 @@ trait ManufacturerTrait
             return null;
         }
         
-        // Log::add(sprintf('Поиск производителя: %s', $manufacturerName), Log::DEBUG, 'com_estakadaimport');
+        Log::add(sprintf('Поиск производителя: %s', $manufacturerName), Log::DEBUG, 'com_estakadaimport');
         
         // Сначала пытаемся найти существующего производителя
         $manufacturerId = $this->getManufacturerByName($manufacturerName);
         
         if ($manufacturerId) {
-            // Log::add(sprintf('Производитель найден: %s (ID: %d)', $manufacturerName, $manufacturerId), Log::DEBUG, 'com_estakadaimport');
+            Log::add(sprintf('Производитель найден: %s (ID: %d)', $manufacturerName, $manufacturerId), Log::DEBUG, 'com_estakadaimport');
             return $manufacturerId;
         }
         
         // Если не найден - создаем нового
-        // Log::add(sprintf('Создание нового производителя: %s', $manufacturerName), Log::INFO, 'com_estakadaimport');
+        Log::add(sprintf('Создание нового производителя: %s', $manufacturerName), Log::INFO, 'com_estakadaimport');
         
         return $this->createManufacturer($manufacturerName, $userId);
     }
@@ -84,22 +87,38 @@ trait ManufacturerTrait
             
             $this->db->insertObject('#__virtuemart_manufacturers_ru_ru', $manufacturerLang);
             
-            // Log::add(sprintf('Создан новый производитель: %s (ID: %d)', $manufacturerName, $manufacturerId), Log::INFO, 'com_estakadaimport');
+            Log::add(sprintf('Создан новый производитель: %s (ID: %d)', $manufacturerName, $manufacturerId), Log::INFO, 'com_estakadaimport');
             
             return $manufacturerId;
             
         } catch (\Exception $e) {
-            // Log::add(sprintf('Ошибка создания производителя %s: %s', $manufacturerName, $e->getMessage()), Log::ERROR, 'com_estakadaimport');
+            Log::add(sprintf('Ошибка создания производителя %s: %s', $manufacturerName, $e->getMessage()), Log::ERROR, 'com_estakadaimport');
             return null;
         }
     }
 
     /**
-     * Обработка привязки производителя к товару
+     * Обработка привязки производителя к товару с проверкой уникальности
      */
-    protected function processManufacturer($manufacturerId, $productId)
+    protected function processManufacturer($manufacturerName, $productId, $userId, $vendorId)
     {
-        // Log::add(sprintf('Привязка товара %d к производителю %d', $productId, $manufacturerId), Log::DEBUG, 'com_estakadaimport');
+        Log::add(sprintf('processManufacturer: vendorId=%d', $vendorId), Log::DEBUG, 'com_estakadaimport');
+        
+        $manufacturerId = $this->getOrCreateManufacturer($manufacturerName, $userId);
+        
+        if (!$manufacturerId) {
+            throw new \Exception('Не удалось получить или создать производителя: ' . $manufacturerName);
+        }
+        
+        Log::add(sprintf('Привязка товара %d к производителю %d', $productId, $manufacturerId), Log::DEBUG, 'com_estakadaimport');
+
+        // ДЕБАГ: проверяем vendorId
+        if ($vendorId == 0) {
+            Log::add(sprintf('ВНИМАНИЕ: vendorId=0 в processManufacturer! Параметры: manufacturerName=%s, productId=%d, userId=%d', $manufacturerName, $productId, $userId), Log::ERROR, 'com_estakadaimport');
+        }
+            
+        // Проверяем уникальность производителя в категориях товара
+        $this->validateAndRegisterManufacturer($manufacturerId, $productId, $vendorId);
         
         // Удаляем старые связи товара с производителями
         $this->removeProductManufacturers($productId);
@@ -107,7 +126,9 @@ trait ManufacturerTrait
         // Создаем новую связь
         $this->addProductToManufacturer($productId, $manufacturerId);
         
-        // Log::add(sprintf('Товар %d привязан к производителю %d', $productId, $manufacturerId), Log::INFO, 'com_estakadaimport');
+        Log::add(sprintf('Товар %d привязан к производителю %d', $productId, $manufacturerId), Log::INFO, 'com_estakadaimport');
+        
+        return $manufacturerId;
     }
 
     /**
@@ -121,7 +142,7 @@ trait ManufacturerTrait
         
         $this->db->setQuery($query)->execute();
         
-        // Log::add(sprintf('Удалены старые связи товара %d с производителями', $productId), Log::DEBUG, 'com_estakadaimport');
+        Log::add(sprintf('Удалены старые связи товара %d с производителями', $productId), Log::DEBUG, 'com_estakadaimport');
     }
 
     /**
@@ -137,8 +158,20 @@ trait ManufacturerTrait
             $this->db->insertObject('#__virtuemart_product_manufacturers', $productManufacturer);
             return true;
         } catch (\Exception $e) {
-            // Log::add(sprintf('Ошибка привязки товара %d к производителю %d: %s', $productId, $manufacturerId, $e->getMessage()), Log::ERROR, 'com_estakadaimport');
+            Log::add(sprintf('Ошибка привязки товара %d к производителю %d: %s', $productId, $manufacturerId, $e->getMessage()), Log::ERROR, 'com_estakadaimport');
             return false;
         }
+    }
+
+    /**
+     * Получает vendor_id пользователя
+     */
+    protected function getVendorId($userId)
+    {
+        $query = $this->db->getQuery(true)
+            ->select('virtuemart_vendor_id')
+            ->from('#__virtuemart_vmusers')
+            ->where('virtuemart_user_id = ' . (int)$userId);
+        return $this->db->setQuery($query)->loadResult();
     }
 }

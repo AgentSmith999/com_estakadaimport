@@ -22,16 +22,58 @@ $document->addScript(Uri::root(true) . '/components/com_estakadaimport/assets/js
 $profiles = $this->profiles;
 $defaultProfileId = $this->defaultProfileId;
 
+// Получаем список продавцов если пользователь SuperUser
+$vendorsList = [];
+$isSuperUser = Factory::getUser()->authorise('core.admin');
+if ($isSuperUser) {
+    $vendorsList = $this->getModel()->getVendorsList();
+}
 ?>
 
 <div class="com-estakadaimport-import">
     <h2 class="mb-4">Импорт товаров из Excel</h2>
 
+    <?php if ($isSuperUser): ?>
+    <div class="alert alert-info mb-4">
+        <strong>Режим SuperUser</strong> - вы можете импортировать товары от имени любого продавца
+    </div>
+    <?php endif; ?>
+
     <form action="<?php echo Route::_('index.php?option=com_estakadaimport&task=import.upload'); ?>" 
           method="post" name="adminForm" id="adminForm" class="form-horizontal" enctype="multipart/form-data">
 
-        <!-- Выбор профиля -->
+        <!-- Выбор продавца (только для SuperUser) -->
+        <?php if ($isSuperUser && !empty($vendorsList)): ?>
         <div class="control-group">
+            <label for="selected_vendor" class="control-label">Импортировать от имени:</label>
+            <div class="controls">
+                <select id="selected_vendor" name="selected_vendor" class="form-select">
+                    <option value="">-- Выберите продавца --</option>
+                    <?php foreach ($vendorsList as $vendor): ?>
+                        <option value="<?php echo $vendor->virtuemart_vendor_id; ?>">
+                            <?php echo htmlspecialchars($vendor->company ?: $vendor->user_name, ENT_QUOTES, 'UTF-8'); ?>
+                            (ID: <?php echo $vendor->virtuemart_vendor_id; ?>)
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <small class="text-muted">Выберите продавца, от имени которого будет выполнен импорт</small>
+            </div>
+        </div>
+        <?php endif; ?>
+
+        <!-- Чекбокс "Только обновить цены" -->
+        <div class="control-group mb-3">
+            <div class="controls">
+                <label class="checkbox">
+                    <input type="checkbox" name="update_prices_only" id="update_prices_only" value="1" />
+                    Только обновить цены
+                </label>
+                <small class="text-muted">При активации обновляются только цены существующих товаров (артикул, цена, модификатор цены)</small>
+            </div>
+        </div>
+
+        <!-- Выбор профиля -->
+        <div class="control-group group-profile">
             <label for="import_profile" class="control-label">Профиль импорта:</label>
             <div class="controls">
                 <select id="import_profile" name="import_profile" class="form-select">
@@ -105,9 +147,6 @@ $defaultProfileId = $this->defaultProfileId;
         <p>Обработано товаров: <span id="completedCount">0</span></p>
         <p>Обработано изображений: <span id="completedImages">0</span></p>
         <div class="mt-3">
-            <button id="reloadPage" class="btn btn-success">
-                <span class="icon-refresh"></span> Обновить страницу
-            </button>
             <button id="newImport" class="btn btn-primary ml-2">
                 <span class="icon-plus"></span> Новый импорт
             </button>

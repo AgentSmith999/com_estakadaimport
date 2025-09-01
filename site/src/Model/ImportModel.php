@@ -20,6 +20,7 @@ require_once __DIR__ . '/Traits/ImageTrait.php';
 require_once __DIR__ . '/Traits/ProgressTrait.php';
 require_once __DIR__ . '/Traits/PriceTrait.php';
 require_once __DIR__ . '/Traits/CustomTrait.php';
+require_once __DIR__ . '/Traits/UniqueBrandTrait.php';
 
 class ImportModel extends BaseModel
 {
@@ -29,7 +30,8 @@ class ImportModel extends BaseModel
         \Joomla\Component\Estakadaimport\Site\Model\Traits\ImageTrait,
         \Joomla\Component\Estakadaimport\Site\Model\Traits\ProgressTrait,
         \Joomla\Component\Estakadaimport\Site\Model\Traits\PriceTrait,
-        \Joomla\Component\Estakadaimport\Site\Model\Traits\CustomTrait;
+        \Joomla\Component\Estakadaimport\Site\Model\Traits\CustomTrait,
+        \Joomla\Component\Estakadaimport\Site\Model\Traits\UniqueBrandTrait;
     
     protected $db;
     protected $logOptions = [
@@ -53,8 +55,13 @@ class ImportModel extends BaseModel
     /**
      * Основной метод импорта
      */
-    public function importFromExcel($filePath, $profileId = 0)
+    public function importFromExcel($filePath, $profileId = 0, $selectedVendorId = null, $updatePricesOnly = false)
     {
+        // ДОБАВИМ ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ПАРАМЕТРОВ
+    Log::add(sprintf('НАЧАЛО ИМПОРТА: filePath=%s, profileId=%d, selectedVendorId=%s, updatePricesOnly=%d', $filePath, $profileId, $selectedVendorId, (int)$updatePricesOnly), Log::DEBUG, 'com_estakadaimport');
+    // Добавляем параметр $updatePricesOnly
+    Log::add(sprintf('Начало импорта (updatePricesOnly): selectedVendorId=%s, updatePricesOnly=%d', $selectedVendorId, $updatePricesOnly), Log::DEBUG, 'com_estakadaimport');
+
         $user = Factory::getUser();
         $app = Factory::getApplication();
 
@@ -66,8 +73,8 @@ class ImportModel extends BaseModel
             return false;
         }
 
-        // Получаем vendor_id
-        $vendorId = $this->getVendorId($user->id);
+        // Получаем vendor_id с учетом выбора SuperUser
+        $vendorId = $this->getVendorId($user->id, $selectedVendorId);
         if (empty($vendorId)) {
             $message = 'Пользователь не является продавцом.';
             Log::add($message, Log::ERROR, 'com_estakadaimport');
@@ -75,8 +82,19 @@ class ImportModel extends BaseModel
             return false;
         }
 
+        // Логируем информацию о том, кто импортирует
+        if ($selectedVendorId && $this->isSuperUser($user->id)) {
+            Log::add(sprintf('SuperUser импортирует от имени продавца ID: %d', $vendorId), Log::INFO, 'com_estakadaimport');
+        }
+
         try {
             Log::add('Начало импорта для vendor_id: ' . $vendorId, Log::INFO, 'com_estakadaimport');
+
+            // Если режим "только обновить цены", пропускаем некоторые шаги
+            if (!$updatePricesOnly) {
+                // Исправляем некорректные slug перед импортом
+                $this->fixInvalidSlugs();
+            }
 
             // ДЕБАГ: логируем полученный profileId
             Log::add('Profile ID received in importFromExcel: ' . $profileId, Log::DEBUG, 'com_estakadaimport');
@@ -88,10 +106,13 @@ class ImportModel extends BaseModel
             $headers = $sheet->rangeToArray('A1:'.$sheet->getHighestColumn().'1', NULL, TRUE, FALSE)[0];
             $columnMap = $this->createColumnMap($headers);
 
-            // Проверяем соответствие профиля ДО подсчета изображений
-            Log::add(sprintf('Calling validateProfileMatch with profileId: %d', $profileId), Log::DEBUG, 'com_estakadaimport');
-            $this->validateProfileMatch($profileId, $columnMap);
-            Log::add('validateProfileMatch completed successfully', Log::DEBUG, 'com_estakadaimport');
+            // В режиме "только обновить цены" пропускаем проверку профиля
+            if (!$updatePricesOnly) {
+                // Проверяем соответствие профиля ДО подсчета изображений
+                Log::add(sprintf('Calling validateProfileMatch with profileId: %d', $profileId), Log::DEBUG, 'com_estakadaimport');
+                $this->validateProfileMatch($profileId, $columnMap);
+                Log::add('validateProfileMatch completed successfully', Log::DEBUG, 'com_estakadaimport');
+            }
             
             // Получаем данные
             $rows = $sheet->toArray();
@@ -100,30 +121,33 @@ class ImportModel extends BaseModel
             }
             array_shift($rows);
 
-            // Подсчитываем общее количество изображений
-            $this->totalImages = 0;
-            $imageColumnIndex = $columnMap['product_image'] ?? null;
-            
-            if ($imageColumnIndex !== null) {
-                foreach ($rows as $row) {
-                    $imageUrls = $row[$imageColumnIndex] ?? '';
-                    if (!empty($imageUrls)) {
-                        $urls = explode('|', $imageUrls);
-                        $this->totalImages += count(array_filter($urls, function($url) {
-                            return !empty(trim($url));
-                        }));
+            // В режиме "только обновить цены" не считаем изображения
+            if (!$updatePricesOnly) {
+                // Подсчитываем общее количество изображений
+                $this->totalImages = 0;
+                $imageColumnIndex = $columnMap['product_image'] ?? null;
+                
+                if ($imageColumnIndex !== null) {
+                    foreach ($rows as $row) {
+                        $imageUrls = $row[$imageColumnIndex] ?? '';
+                        if (!empty($imageUrls)) {
+                            $urls = explode('|', $imageUrls);
+                            $this->totalImages += count(array_filter($urls, function($url) {
+                                return !empty(trim($url));
+                            }));
+                        }
                     }
                 }
+            } else {
+                $this->totalImages = 0; // В режиме обновления цен изображения не обрабатываются
             }
 
-            Log::add(sprintf('Calling validateProfileMatch with profileId: %d', $profileId), Log::DEBUG, 'com_estakadaimport');
-
-            // Проверяем соответствие профиля и заголовков Excel
-            // В начале метода импорта, после получения columnMap
-            $this->validateProfileMatch($profileId, $columnMap);
-
-            Log::add('validateProfileMatch completed successfully', Log::DEBUG, 'com_estakadaimport');
-
+            // В режиме "только обновить цены" пропускаем проверку профиля
+            if (!$updatePricesOnly) {
+                Log::add(sprintf('Calling validateProfileMatch with profileId: %d', $profileId), Log::DEBUG, 'com_estakadaimport');
+                $this->validateProfileMatch($profileId, $columnMap);
+                Log::add('validateProfileMatch completed successfully', Log::DEBUG, 'com_estakadaimport');
+            }
 
             error_log('Total images to process: ' . $this->totalImages);
             
@@ -140,58 +164,79 @@ class ImportModel extends BaseModel
             foreach ($rows as $rowIndex => $row) {
                 try {
                     error_log('Processing row ' . ($rowIndex + 2)); // +2 потому что первая строка - заголовки
-                    // Декодируем ВСЕ значения в строке
-                    $decodedRow = array_map([$this, 'decodeUnicodeString'], $row);
+                    
+                    // В режиме "только обновить цены" обрабатываем только нужные колонки
+                    if ($updatePricesOnly) {
+                        $data = [
+                            'Артикул' => $this->decodeUnicodeString($row[$columnMap['product_sku']] ?? ''),
+                            'Цена' => $this->decodeUnicodeString($row[$columnMap['product_price']] ?? 0)
+                        ];
+                        
+                        // Добавляем модификатор цены если есть
+                        if (isset($columnMap['price_override'])) {
+                            $data['Модификатор цены'] = $this->decodeUnicodeString($row[$columnMap['price_override']] ?? 0);
+                        } else {
+                            $data['Модификатор цены'] = 0;
+                        }
+                        
+                        $priceData = [
+                            'base' => $data['Цена'],
+                            'override' => $data['Модификатор цены']
+                        ];
+                    } else {
+                        // Полный режим импорта
+                        $decodedRow = array_map([$this, 'decodeUnicodeString'], $row);
 
-                    // Декодируем Unicode escape последовательности
-                    $data = [
-                        'Артикул' => $this->decodeUnicodeString($row[$columnMap['product_sku']] ?? ''),
-                        'Наименование' => $this->decodeUnicodeString($row[$columnMap['product_name']] ?? ''),
-                        'Количество' => $this->decodeUnicodeString($row[$columnMap['product_in_stock']] ?? 0),
-                        'Изображение' => $this->decodeUnicodeString($row[$columnMap['product_image']] ?? ''),
-                        'Категория (Номер/ID/Название)' => $this->decodeUnicodeString($row[$columnMap['categories']] ?? ''),
-                        'Производитель' => $this->decodeUnicodeString($row[$columnMap['manufacturer']] ?? '')
-                    ];
+                        $data = [
+                            'Артикул' => $this->decodeUnicodeString($row[$columnMap['product_sku']] ?? ''),
+                            'Наименование' => $this->decodeUnicodeString($row[$columnMap['product_name']] ?? ''),
+                            'Количество' => $this->decodeUnicodeString($row[$columnMap['product_in_stock']] ?? 0),
+                            'Изображение' => $this->decodeUnicodeString($row[$columnMap['product_image']] ?? ''),
+                            'Категория (Номер/ID/Название)' => $this->decodeUnicodeString($row[$columnMap['categories']] ?? ''),
+                            'Производитель' => $this->decodeUnicodeString($row[$columnMap['manufacturer']] ?? '')
+                        ];
 
-                    // Парсинг цен отдельно (тоже используем декодированные данные)
-                    $priceData = $this->parsePriceData($decodedRow, $columnMap);
-                    $data['Цена'] = $priceData['base'];
-                    $data['МодификаторЦены'] = $priceData['override'];
+                        // Парсинг цен отдельно
+                        $priceData = $this->parsePriceData($decodedRow, $columnMap);
+                        $data['Цена'] = $priceData['base'];
+                        $data['Модификатор цены'] = $priceData['override'];
+                    }
 
                     // Логирование цен
-                    Log::add(sprintf('Строка %d - данные цены: базовая=%s, модификатор=%s', $rowIndex + 2, $data['Цена'], $data['МодификаторЦены']), Log::DEBUG, 'com_estakadaimport');
-
-                    // Логируем сырые и декодированные данные для отладки
-                   // Log::add(sprintf('Строка %d - сырые данные: %s', $rowIndex + 2, json_encode($row)), Log::DEBUG, 'com_estakadaimport');
-                   // Log::add(sprintf('Строка %d - обработанные данные: %s', $rowIndex + 2, print_r($data, true)), Log::DEBUG, 'com_estakadaimport');
+                    Log::add(sprintf('Строка %d - данные цены: базовая=%s, модификатор=%s', $rowIndex + 2, $data['Цена'], $data['Модификатор цены']), Log::DEBUG, 'com_estakadaimport');
 
                     // Проверяем обязательные поля
                     if (empty($data['Артикул'])) {
                         throw new \Exception('Не указан артикул');
                     }
                     
-                    if (empty($data['Наименование'])) {
-                        throw new \Exception('Не указано наименование');
-                    }
-                    
-                    if (empty($data['Категория (Номер/ID/Название)'])) {
-                        throw new \Exception('Не указана категория');
+                    // В полном режиме проверяем дополнительные обязательные поля
+                    if (!$updatePricesOnly) {
+                        if (empty($data['Наименование'])) {
+                            throw new \Exception('Не указано наименование');
+                        }
+                        
+                        if (empty($data['Категория (Номер/ID/Название)'])) {
+                            throw new \Exception('Не указана категория');
+                        }
+
+                        if (empty($data['Производитель'])) {
+                            throw new \Exception('Не указан производитель');
+                        }
                     }
 
-                    if (empty($data['Производитель'])) {
-                        throw new \Exception('Не указан производитель');
-                    }
-
-                    // Обработка товара с передачей profileId
-                    $productId = $this->processProduct($data, $vendorId, $user->id, $priceData, $profileId);
+                    // Обработка товара с передачей profileId и флага updatePricesOnly
+                    $productId = $this->processProduct($data, $vendorId, $user->id, $priceData, $profileId, $updatePricesOnly);
                     
                     if ($productId) {
-                        // Обработка кастомных полей - передаем ДЕКОДИРОВАННУЮ строку
-                        $this->processCustomFields($productId, $decodedRow, $columnMap, $profileId);
+                        // В полном режиме обрабатываем кастомные поля и изображения
+                        if (!$updatePricesOnly) {
+                            $this->processCustomFields($productId, $decodedRow, $columnMap, $profileId);
 
-                        // Обработка изображений
-                        if (!empty($data['Изображение'])) {
-                            $this->processImages($data['Изображение'], $productId, $vendorId, $user->id);
+                            // Обработка изображений
+                            if (!empty($data['Изображение'])) {
+                                $this->processImages($data['Изображение'], $productId, $vendorId, $user->id, $updatePricesOnly);
+                            }
                         }
                         
                         $count++;
@@ -288,10 +333,12 @@ class ImportModel extends BaseModel
     }
 
     /**
-     * Обработка товара (добавляем параметр profileId)
+     * Обработка товара
      */
-    protected function processProduct($data, $vendorId, $userId, $priceData = null, $profileId = 0)
+    protected function processProduct($data, $vendorId, $userId, $priceData = null, $profileId = 0, $updatePricesOnly = false)
     {
+        Log::add(sprintf('Обработка товара: vendorId=%d, updatePricesOnly=%d', $vendorId, $updatePricesOnly), Log::DEBUG, 'com_estakadaimport');
+
         // Обновляем прогресс - этап обработки товара
         $this->setImportProgress(
             $this->currentImageIndex, 
@@ -303,53 +350,87 @@ class ImportModel extends BaseModel
             throw new \Exception('Не указан артикул');
         }
         
-        if (empty($data['Наименование'])) {
-            throw new \Exception('Не указано наименование');
-        }
-        
-        if (empty($data['Категория (Номер/ID/Название)'])) {
-            throw new \Exception('Не указана категория');
-        }
-        
-        if (empty($data['Производитель'])) {
-            throw new \Exception('Не указан производитель');
+        // В полном режиме проверяем дополнительные обязательные поля
+        if (!$updatePricesOnly) {
+            if (empty($data['Наименование'])) {
+                throw new \Exception('Не указано наименование');
+            }
+            
+            if (empty($data['Категория (Номер/ID/Название)'])) {
+                throw new \Exception('Не указана категория');
+            }
+            
+            if (empty($data['Производитель'])) {
+                throw new \Exception('Не указан производитель');
+            }
+
+            Log::add(sprintf('ПОЛНЫЙ РЕЖИМ: обрабатываем кастомные поля и изображения для товара ID: %d', $productId), Log::DEBUG, 'com_estakadaimport');
+            $this->processCustomFields($productId, $decodedRow, $columnMap, $profileId);
+
+            // Обработка изображений
+            if (!empty($data['Изображение'])) {
+                Log::add(sprintf('Обработка изображений для товара ID: %d', $productId), Log::DEBUG, 'com_estakadaimport');
+                $this->processImages($data['Изображение'], $productId, $vendorId, $userId, $updatePricesOnly);
+            }
+        } else {
+            Log::add(sprintf('РЕЖИМ ОБНОВЛЕНИЯ ЦЕН: пропускаем кастомные поля и изображения для товара ID: %d', $productId), Log::DEBUG, 'com_estakadaimport');
         }
 
+        // Нормализуем артикул (добавляем префикс vendor_id если нужно)
+        $originalSku = trim($data['Артикул']);
+        $vendorSku = $this->normalizeSku($originalSku, $vendorId);
+        
+        // Логируем преобразование артикула
+        if ($originalSku !== $vendorSku) {
+            Log::add(sprintf('Артикул нормализован: %s -> %s', $originalSku, $vendorSku), Log::DEBUG, 'com_estakadaimport');
+        }
+        
         // Если priceData не передан, создаем из данных
         if ($priceData === null) {
             $priceData = [
                 'base' => $data['Цена'] ?? 0,
-                'override' => $data['МодификаторЦены'] ?? 0
+                'override' => $data['Модификатор цены'] ?? 0
             ];
         }
 
         // Детальное логирование перед обновлением цены
-        Log::add(sprintf('Товар %s: обновление цены - базовая: %.2f, модификатор: %.2f', $data['Артикул'], $priceData['base'], $priceData['override']), Log::INFO, 'com_estakadaimport');
-
-        // После создания товара обновляем цену
-        if ($productId) {
-            $priceResult = $this->updateProductPrice($productId, $priceData, $vendorId);
-            if (!$priceResult) {
-                Log::add(sprintf('Ошибка обновления цены для товара %s (ID: %d)', 
-                    $data['Артикул'], $productId), Log::ERROR, 'com_estakadaimport');
-            }
-        }
+        Log::add(sprintf('Товар %s: обновление цены - базовая: %.2f, модификатор: %.2f', $originalSku, $priceData['base'], $priceData['override']), Log::INFO, 'com_estakadaimport');
 
         $basePrice = $this->cleanPrice($priceData['base']);
         if ($basePrice <= 0) {
-            Log::add(sprintf('Внимание: товар %s имеет нулевую или отрицательную базовую цену: %s', $data['Артикул'], $data['Цена']), Log::WARNING, 'com_estakadaimport');
+            Log::add(sprintf('Внимание: товар %s имеет нулевую или отрицательную базовую цену: %s', $originalSku, $data['Цена']), Log::WARNING, 'com_estakadaimport');
         }
+
+        // Ищем товар по нормализованному артикулу
+        $productId = $this->getProductIdBySku($originalSku, $vendorId);
+        
+        if (!$productId) {
+            // Товар не найден
+            if ($updatePricesOnly) {
+                // В режиме "только обновить цены" пропускаем несуществующие товары
+                Log::add(sprintf('Товар %s не найден - пропускаем обновление цены', $vendorSku), Log::WARNING, 'com_estakadaimport');
+                return null;
+            } else {
+                // В полном режиме создаем новый товар
+                return $this->createNewProduct($data, $vendorId, $userId, $priceData, $vendorSku, $originalSku);
+            }
+        }
+        
+        // Товар найден - обновляем
+        return $this->updateExistingProduct($productId, $data, $vendorId, $userId, $priceData, $updatePricesOnly, $vendorSku);
+    }
+
+    /**
+     * Создание нового товара (полный режим)
+     */
+    protected function createNewProduct($data, $vendorId, $userId, $priceData, $vendorSku, $originalSku)
+    {
+        Log::add(sprintf('Создание нового товара: %s', $vendorSku), Log::INFO, 'com_estakadaimport');
 
         // Декодируем значения на случай если они пришли в Unicode
         $categoryValue = $this->decodeUnicodeString($data['Категория (Номер/ID/Название)']);
         $manufacturerValue = $this->decodeUnicodeString($data['Производитель']);
         
-        // Проверяем категорию ДО создания товара
-        // $categoryId = $this->getCategoryId($data['Категория (Номер/ID/Название)']);
-        // if (!$categoryId) {
-        //    throw new \Exception('Категория не найдена: ' . $data['Категория (Номер/ID/Название)']);
-        // }
-
         // Получаем/создаем производителя
         $manufacturerId = $this->getOrCreateManufacturer($data['Производитель'], $userId);
         if (!$manufacturerId) {
@@ -358,27 +439,20 @@ class ImportModel extends BaseModel
 
         // Подготовка данных
         $productName = stripslashes($data['Наименование']);
-        $slug = $this->generateSlug($productName, $data['Артикул']);
+        $slug = $this->generateSlug($productName, $vendorSku);
         
         // Основные данные товара
         $product = new \stdClass();
         $product->virtuemart_vendor_id = $vendorId;
-        $product->product_sku = $data['Артикул'];
+        $product->product_sku = $vendorSku;
         $product->product_in_stock = (int)$data['Количество'];
         $product->created_by = $userId;
         $product->modified_by = $userId;
         $product->published = 1;
         
-        // Проверяем существование товара
-        $productId = $this->getProductIdBySku($data['Артикул']);
-        
-        if ($productId) {
-            $product->virtuemart_product_id = $productId;
-            $this->db->updateObject('#__virtuemart_products', $product, 'virtuemart_product_id');
-        } else {
-            $this->db->insertObject('#__virtuemart_products', $product);
-            $productId = $this->db->insertid();
-        }
+        // Создаем новый товар
+        $this->db->insertObject('#__virtuemart_products', $product);
+        $productId = $this->db->insertid();
         
         // Языковые данные
         $productLang = new \stdClass();
@@ -391,18 +465,60 @@ class ImportModel extends BaseModel
         $this->saveProductLang($productLang);
         
         // Обработка категорий
-        // $this->processCategories($categoryId, $productId);
-
-        // Обработка категорий (теперь передаем всю строку категорий)
         $this->processCategories($data['Категория (Номер/ID/Название)'], $productId);
         
         // Обработка производителя
-        $this->processManufacturer($manufacturerId, $productId);
+        $manufacturerId = $this->processManufacturer($data['Производитель'], $productId, $userId, $vendorId);
 
-        // После создания товара обновляем цену
-        if ($productId) {
-            $this->updateProductPrice($productId, $priceData, $vendorId);
+        // Обновляем цену
+        $this->updateProductPrice($productId, $priceData, $vendorId);
+        
+        Log::add(sprintf('Товар создан: %s (ID: %d)', $vendorSku, $productId), Log::INFO, 'com_estakadaimport');
+        
+        return $productId;
+    }
+
+    /**
+     * Обновление существующего товара
+     */
+    protected function updateExistingProduct($productId, $data, $vendorId, $userId, $priceData, $updatePricesOnly, $vendorSku)
+    {
+        Log::add(sprintf('Обновление товара: %s (ID: %d)', $vendorSku, $productId), Log::INFO, 'com_estakadaimport');
+
+        // Основные данные товара
+        $product = new \stdClass();
+        $product->virtuemart_product_id = $productId;
+        $product->modified_by = $userId;
+        
+        // В полном режиме обновляем все поля
+        if (!$updatePricesOnly) {
+            $product->product_in_stock = (int)$data['Количество'];
+            
+            // Обновляем языковые данные
+            $productName = stripslashes($data['Наименование']);
+            $slug = $this->generateSlug($productName, $vendorSku);
+            
+            $productLang = new \stdClass();
+            $productLang->virtuemart_product_id = $productId;
+            $productLang->product_name = $productName;
+            $productLang->slug = $slug;
+            
+            $this->saveProductLang($productLang);
+            
+            // Обработка категорий
+            $this->processCategories($data['Категория (Номер/ID/Название)'], $productId);
+            
+            // Обработка производителя
+            $this->processManufacturer($data['Производитель'], $productId, $userId, $vendorId);
         }
+        
+        // Обновляем основную запись товара
+        $this->db->updateObject('#__virtuemart_products', $product, 'virtuemart_product_id');
+        
+        // Обновляем цену (в любом режиме)
+        $this->updateProductPrice($productId, $priceData, $vendorId);
+        
+        Log::add(sprintf('Товар обновлен: %s (ID: %d)', $vendorSku, $productId), Log::INFO, 'com_estakadaimport');
         
         return $productId;
     }
@@ -423,18 +539,6 @@ class ImportModel extends BaseModel
         }
         
         return $string;
-    }
-
-    /**
-     * Получение ID товара по артикулу
-     */
-    protected function getProductIdBySku($sku)
-    {
-        $query = $this->db->getQuery(true)
-            ->select('virtuemart_product_id')
-            ->from('#__virtuemart_products')
-            ->where('product_sku = ' . $this->db->quote($sku));
-        return $this->db->setQuery($query)->loadResult();
     }
 
     /**
@@ -469,16 +573,67 @@ class ImportModel extends BaseModel
     }
 
     /**
-     * Получение vendor_id пользователя
+     * Получение vendor_id пользователя с учетом выбора SuperUser
      */
-    protected function getVendorId($userId)
+    protected function getVendorId($userId, $selectedVendorId = null)
     {
+        // Если SuperUser выбрал конкретного продавца
+        if ($selectedVendorId && $this->isSuperUser($userId)) {
+            // Проверяем, что выбранный vendor_id существует
+            $query = $this->db->getQuery(true)
+                ->select('COUNT(*)')
+                ->from('#__virtuemart_vmusers')
+                ->where('virtuemart_vendor_id = ' . (int)$selectedVendorId);
+            
+            if ($this->db->setQuery($query)->loadResult()) {
+                return $selectedVendorId;
+            }
+        }
+        
+        // Обычный случай - возвращаем vendor_id пользователя
         $query = $this->db->getQuery(true)
             ->select('virtuemart_vendor_id')
             ->from('#__virtuemart_vmusers')
             ->where('virtuemart_user_id = ' . (int)$userId);
+        
         return $this->db->setQuery($query)->loadResult();
     }
+
+    /**
+     * Получает список всех продавцов для SuperUser
+     */
+    public function getVendorsList()
+    {
+        $query = $this->db->getQuery(true)
+            ->select([
+                'vmu.virtuemart_vendor_id', 
+                'vui.company',
+                'u.name AS user_name',
+                'u.username'
+            ])
+            ->from('#__virtuemart_vmusers AS vmu')
+            ->join('INNER', '#__virtuemart_userinfos AS vui ON vmu.virtuemart_user_id = vui.virtuemart_user_id')
+            ->join('INNER', '#__users AS u ON vmu.virtuemart_user_id = u.id')
+            ->where('vmu.virtuemart_vendor_id IS NOT NULL')
+            ->where('vmu.virtuemart_vendor_id != 0')
+            ->order('vui.company ASC');
+        
+        return $this->db->setQuery($query)->loadObjectList();
+    }
+
+    /**
+     * Проверяет, является ли пользователь SuperUser
+     */
+    protected function isSuperUser($userId = null)
+    {
+        if ($userId === null) {
+            $user = Factory::getUser();
+            $userId = $user->id;
+        }
+        
+        return Factory::getUser($userId)->authorise('core.admin');
+    }
+
 
     /**
      * Анализ Excel файла для подсчета изображений и строк
@@ -504,19 +659,15 @@ class ImportModel extends BaseModel
             if ($imageColumnIndex !== null) {
                 for ($i = 1; $i < count($rows); $i++) {
                     $imageUrls = $rows[$i][$imageColumnIndex] ?? '';
-                   // Log::add(sprintf('Строка %d, изображения: %s', $i, $imageUrls), Log::DEBUG, 'com_estakadaimport');
                     if (!empty($imageUrls)) {
                         $urls = explode('|', $imageUrls);
                         $filteredUrls = array_filter($urls, function($url) {
                             return !empty(trim($url));
                         });
                         $totalImages += count($filteredUrls);
-                       // Log::add(sprintf('Найдено %d изображений в строке %d', count($filteredUrls), $i), Log::DEBUG, 'com_estakadaimport');
                     }
                 }
             }
-
-           // Log::add(sprintf('Итого: %d строк, %d изображений', $totalRows, $totalImages), Log::INFO, 'com_estakadaimport');
             
             return [
                 'totalImages' => $totalImages,
@@ -541,7 +692,7 @@ class ImportModel extends BaseModel
             
         $result = (int)$this->db->setQuery($query)->loadResult();
         
-        Log::add(sprintf('Default profile ID: %d', $result), Log::DEBUG, 'com_estakadaimport');
+        // Log::add(sprintf('Default profile ID: %d', $result), Log::DEBUG, 'com_estakadaimport');
         
         return $result;
     }
@@ -677,6 +828,128 @@ class ImportModel extends BaseModel
         }
         
         return $suitableProfiles;
+    }
+
+    /**
+     * Генерация уникального артикула с префиксом vendor_id
+     */
+    protected function generateVendorSku($originalSku, $vendorId)
+    {
+        return 'i' . $vendorId . '__' . $originalSku;
+    }
+
+    /**
+     * Проверяет, имеет ли артикул правильный префикс vendor_id
+     */
+    protected function hasVendorPrefix($sku, $vendorId)
+    {
+        $expectedPrefix = 'i' . $vendorId . '__';
+        return strpos($sku, $expectedPrefix) === 0;
+    }
+
+    /**
+     * Нормализует артикул - добавляет префикс vendor_id если его нет
+     */
+    protected function normalizeSku($sku, $vendorId)
+    {
+        // Если артикул уже имеет правильный префикс, возвращаем как есть
+        if ($this->hasVendorPrefix($sku, $vendorId)) {
+            return $sku;
+        }
+        
+        // Если артикул имеет префикс другого vendor_id, исправляем его
+        if (preg_match('/^i(\d+)__(.+)$/', $sku, $matches)) {
+            return 'i' . $vendorId . '__' . $matches[2];
+        }
+        
+        // Если артикул без префикса, добавляем наш префикс
+        return 'i' . $vendorId . '__' . $sku;
+    }
+
+    /**
+     * Получение оригинального артикула (без префикса vendor_id)
+     */
+    protected function getOriginalSku($vendorSku)
+    {
+        if (preg_match('/^i\d+__(.+)$/', $vendorSku, $matches)) {
+            return $matches[1]; // Возвращаем оригинальный артикул без префикса
+        }
+        return $vendorSku; // Если формат не соответствует, возвращаем как есть
+    }
+
+    /**
+     * Получение ID товара по артикулу с учетом vendor_id
+     * Ищет товар по нормализованному артикулу
+     */
+    protected function getProductIdBySku($sku, $vendorId)
+    {
+        $normalizedSku = $this->normalizeSku($sku, $vendorId);
+        
+        $query = $this->db->getQuery(true)
+            ->select('virtuemart_product_id')
+            ->from('#__virtuemart_products')
+            ->where('product_sku = ' . $this->db->quote($normalizedSku))
+            ->where('virtuemart_vendor_id = ' . (int)$vendorId);
+        
+        return $this->db->setQuery($query)->loadResult();
+    }
+
+    /**
+     * Поиск товара по оригинальному артикулу (без префикса) для данного vendor_id
+     */
+    protected function findProductByOriginalSku($originalSku, $vendorId)
+    {
+        $vendorSku = $this->generateVendorSku($originalSku, $vendorId);
+        
+        $query = $this->db->getQuery(true)
+            ->select('virtuemart_product_id')
+            ->from('#__virtuemart_products')
+            ->where('product_sku = ' . $this->db->quote($vendorSku))
+            ->where('virtuemart_vendor_id = ' . (int)$vendorId);
+        
+        return $this->db->setQuery($query)->loadResult();
+    }
+
+    /**
+     * Миграция существующих товаров на новый формат артикулов
+     * (можно запустить один раз для обновления старых записей)
+     */
+    public function migrateExistingSkus($vendorId)
+    {
+        try {
+            // Получаем все товары продавца со старыми артикулами
+            $query = $this->db->getQuery(true)
+                ->select('virtuemart_product_id, product_sku')
+                ->from('#__virtuemart_products')
+                ->where('virtuemart_vendor_id = ' . (int)$vendorId)
+                ->where('product_sku NOT LIKE ' . $this->db->quote('i' . $vendorId . '__%'));
+            
+            $products = $this->db->setQuery($query)->loadObjectList();
+            
+            $migrated = 0;
+            foreach ($products as $product) {
+                // Пропускаем артикулы, которые уже имеют префикс другого vendor_id
+                if (preg_match('/^i\d+__/', $product->product_sku)) {
+                    continue;
+                }
+                
+                // Обновляем артикул
+                $newSku = $this->generateVendorSku($product->product_sku, $vendorId);
+                
+                $updateQuery = $this->db->getQuery(true)
+                    ->update('#__virtuemart_products')
+                    ->set('product_sku = ' . $this->db->quote($newSku))
+                    ->where('virtuemart_product_id = ' . (int)$product->virtuemart_product_id);
+                
+                $this->db->setQuery($updateQuery)->execute();
+                $migrated++;
+            }
+            
+            return sprintf('Мигрировано %d товаров', $migrated);
+            
+        } catch (\Exception $e) {
+            throw new \Exception('Ошибка миграции артикулов: ' . $e->getMessage());
+        }
     }
 
 

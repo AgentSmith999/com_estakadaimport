@@ -13,407 +13,301 @@ use Joomla\CMS\Router\Route;
 use Joomla\CMS\Filesystem\File;
 use Joomla\CMS\Session\Session;
 use Joomla\CMS\Log\Log;
+use Joomla\CMS\Response\JsonResponse;
 
 class ImportController extends BaseController
 {
-    /**
-     * Загрузка и обработка Excel файла
-     */
     public function upload()
     {
-        // Проверка токена
+        // Проверяем CSRF токен
         $this->checkToken();
 
         $app = Factory::getApplication();
-        $input = $app->input;
+        $user = Factory::getUser();
 
-        // Сохраняем текущий URL для редиректа
-        $returnUrl = $input->server->getString('HTTP_REFERER', Route::_('index.php?option=com_estakadaimport&view=import', false));
+        // Получаем параметры из запроса
+        $profileId = $this->input->getInt('import_profile', 0);
+        $selectedVendorId = $this->input->getInt('selected_vendor', null);
+        $updatePricesOnly = $this->input->getBool('update_prices_only', false); // НОВЫЙ ПАРАМЕТР
+        
+        // Проверяем безопасность: только SuperUser может выбирать vendor
+        if ($selectedVendorId && !$user->authorise('core.admin')) {
+            $app->enqueueMessage('Доступ запрещен', 'error');
+            $app->redirect(Route::_('index.php?option=com_estakadaimport', false));
+            return false;
+        }
+
+        // Обработка загрузки файла
+        $file = $this->input->files->get('xlsfile');
+
+        if (!$file || $file['error'] !== UPLOAD_ERR_OK) {
+            $app->enqueueMessage('Ошибка загрузки файла', 'error');
+            $app->redirect(Route::_('index.php?option=com_estakadaimport', false));
+            return false;
+        }
+
+        // Проверяем расширение файла
+        $allowedExtensions = ['xls', 'xlsx'];
+        $fileExtension = pathinfo($file['name'], PATHINFO_EXTENSION);
+        
+        if (!in_array(strtolower($fileExtension), $allowedExtensions)) {
+            $app->enqueueMessage('Недопустимый формат файла. Разрешены только .xls и .xlsx', 'error');
+            $app->redirect(Route::_('index.php?option=com_estakadaimport', false));
+            return false;
+        }
+
+        // Сохраняем файл во временную директорию
+        $tmpPath = $app->get('tmp_path') . '/' . $file['name'];
+        
+        if (!move_uploaded_file($file['tmp_name'], $tmpPath)) {
+            $app->enqueueMessage('Ошибка сохранения файла', 'error');
+            $app->redirect(Route::_('index.php?option=com_estakadaimport', false));
+            return false;
+        }
 
         try {
-            // Получаем загруженный файл
-            $file = $input->files->get('xlsfile');
-
-            // Получаем ID профиля из формы
-            $profileId = $input->getInt('import_profile', 0);
-
-            // Логирование для отладки
-            Log::add('Profile ID from form: ' . $profileId, Log::DEBUG, 'com_estakadaimport');
-
-            // Проверяем, что файл был загружен
-            if (empty($file) || $file['error'] !== UPLOAD_ERR_OK) {
-                throw new \Exception("Файл не был загружен");
-            }
-
-            // Проверяем расширение файла
-            $extension = strtolower(File::getExt($file['name']));
-            if (!in_array($extension, ['xls', 'xlsx'])) {
-                throw new \Exception("Неверное расширение файла. Разрешены только .xls и .xlsx");
-            }
-
-            // Проверяем размер файла
-            $maxSize = $this->getMaxUploadSize();
-            if ($file['size'] > $maxSize) {
-                throw new \Exception("Файл слишком большой. Максимальный размер: " . $this->formatSize($maxSize));
-            }
-
-            // Создаем временную директорию, если не существует
-            $tmpPath = JPATH_ROOT . '/tmp/com_estakadaimport';
-            if (!is_dir($tmpPath)) {
-                if (!mkdir($tmpPath, 0755, true)) {
-                    throw new \Exception("Не удалось создать временную директорию");
-                }
-            }
-
-            // Генерируем уникальное имя файла
-            $filename = uniqid('import_') . '.' . $extension;
-            $filePath = $tmpPath . '/' . $filename;
-
-            // Перемещаем загруженный файл
-            if (!move_uploaded_file($file['tmp_name'], $filePath)) {
-                throw new \Exception("Не удалось сохранить загруженный файл");
-            }
-
-            // Обрабатываем файл через модель с передачей profileId
-            $model = $this->getModel('import');
-
-            // УДАЛЯЕМ дублирующую проверку профиля из контроллера
-            // Проверка будет выполняться в модели importFromExcel()
-
-            // Выполняем импорт
-            $result = $model->importFromExcel($filePath, $profileId); // Передаем profileId
+            // Получаем модель и запускаем импорт с новым параметром
+            $model = $this->getModel('Import');
+            $result = $model->importFromExcel($tmpPath, $profileId, $selectedVendorId, $updatePricesOnly);
 
             // Удаляем временный файл
-            if (file_exists($filePath)) {
-                unlink($filePath);
+            if (file_exists($tmpPath)) {
+                unlink($tmpPath);
             }
 
             if ($result) {
-                $app->enqueueMessage("Импорт успешно завершен", 'success');
+                $message = $updatePricesOnly ? 'Цены успешно обновлены' : 'Импорт завершен успешно';
+                $app->enqueueMessage($message, 'message');
             } else {
-                // Сообщение об ошибке уже установлено в модели
+                $message = $updatePricesOnly ? 'Произошли ошибки при обновлении цен' : 'Произошли ошибки при импорте';
+                $app->enqueueMessage($message, 'warning');
             }
 
         } catch (\Exception $e) {
-            $app->enqueueMessage($e->getMessage(), 'error');
-        }
-
-        // Перенаправляем обратно на ту же страницу, откуда пришли
-        $this->setRedirect($returnUrl);
-    }
-
-    /**
-     * Получение максимального размера загружаемого файла
-     */
-    protected function getMaxUploadSize()
-    {
-        $maxSize = ini_get('upload_max_filesize');
-        $maxSize = $this->convertToBytes($maxSize);
-        
-        $postMaxSize = ini_get('post_max_size');
-        $postMaxSize = $this->convertToBytes($postMaxSize);
-        
-        return min($maxSize, $postMaxSize);
-    }
-
-    /**
-     * Конвертация размера в байты
-     */
-    protected function convertToBytes($size)
-    {
-        $unit = strtoupper(substr($size, -1));
-        $value = (int)substr($size, 0, -1);
-        
-        switch ($unit) {
-            case 'G': $value *= 1024;
-            case 'M': $value *= 1024;
-            case 'K': $value *= 1024;
-        }
-        
-        return $value;
-    }
-
-    /**
-     * Форматирование размера файла
-     */
-    protected function formatSize($bytes)
-    {
-        $units = ['B', 'KB', 'MB', 'GB'];
-        $bytes = max($bytes, 0);
-        $pow = floor(($bytes ? log($bytes) : 0) / log(1024));
-        $pow = min($pow, count($units) - 1);
-        $bytes /= pow(1024, $pow);
-        
-        return round($bytes, 2) . ' ' . $units[$pow];
-    }
-
-    /**
-     * Проверка CSRF токена
-     */
-    public function checkToken($method = 'post', $redirect = true)
-    {
-        if (!Factory::getSession()->checkToken($method)) {
-            if ($redirect) {
-                // Используем referer для редиректа назад
-                $returnUrl = Factory::getApplication()->input->server->getString('HTTP_REFERER', Route::_('index.php?option=com_estakadaimport&view=import', false));
-                $this->setRedirect($returnUrl);
-                $this->redirect();
+            // Удаляем временный файл в случае ошибки
+            if (file_exists($tmpPath)) {
+                unlink($tmpPath);
             }
-            throw new \Exception("Неверный токен безопасности");
+            
+            $app->enqueueMessage('Ошибка импорта: ' . $e->getMessage(), 'error');
         }
+
+        $app->redirect(Route::_('index.php?option=com_estakadaimport', false));
     }
 
-    /**
-     * Анализ Excel файла
-     */
     public function analyzeSimple()
     {
-        $app = Factory::getApplication();
-        
-        try {
-            // Проверяем токен
-            if (!Session::checkToken()) {
-                throw new \Exception('Неверный токен');
-            }
-            
-            $input = $app->input;
-            $file = $input->files->get('xlsfile');
+        // Проверяем CSRF токен
+        $this->checkToken();
 
-            $profileId = $input->getInt('import_profile', 0);
-            Log::add('Profile ID in analyzeSimple: ' . $profileId, Log::DEBUG, 'com_estakadaimport');
-            
-            if (empty($file) || $file['error'] !== UPLOAD_ERR_OK) {
-                throw new \Exception('Файл не загружен');
-            }
-            
-            // Перемещаем файл во временную директорию
-            $tmpDir = JPATH_SITE . '/tmp';
-            $tmpFilePath = $tmpDir . '/' . uniqid() . '_' . $file['name'];
-            
-            if (!move_uploaded_file($file['tmp_name'], $tmpFilePath)) {
-                throw new \Exception('Не удалось сохранить временный файл');
-            }
-            
-            // Анализируем файл
-            $model = $this->getModel('Import');
-            
-            if (!method_exists($model, 'analyzeExcelFile')) {
-                throw new \Exception('Метод analyzeExcelFile не найден в модели');
-            }
-            
-            $analysis = $model->analyzeExcelFile($tmpFilePath);
-            
-            // Удаляем временный файл
-            if (file_exists($tmpFilePath)) {
-                unlink($tmpFilePath);
-            }
-            
-            // Устанавливаем правильный Content-Type для JSON
-            $app->setHeader('Content-Type', 'application/json', true);
-            
-            echo json_encode([
-                'success' => true,
-                'data' => [
-                    'totalImages' => $analysis['totalImages'],
-                    'totalRows' => $analysis['totalRows'],
-                    'fileName' => $file['name'],
-                    'fileSize' => $file['size']
-                ]
-            ]);
-            
-        } catch (\Exception $e) {
-            // Устанавливаем правильный Content-Type для JSON
-            $app->setHeader('Content-Type', 'application/json', true);
-            
-            // Возвращаем оригинальное сообщение об ошибке
-            echo json_encode([
-                'success' => false,
-                'message' => $e->getMessage()
-            ]);
-        }
+        $app = Factory::getApplication();
+        $user = Factory::getUser();
+
+        Log::add(sprintf('ANALYZE: update_prices_only=%d', $updatePricesOnly), Log::DEBUG, 'com_estakadaimport');
+
+        // Получаем параметры из запроса
+        $selectedVendorId = $this->input->getInt('selected_vendor', null);
+        $updatePricesOnly = $this->input->getBool('update_prices_only', false); // НОВЫЙ ПАРАМЕТР
         
+        // Проверяем безопасность: только SuperUser может выбирать vendor
+        if ($selectedVendorId && !$user->authorise('core.admin')) {
+            echo json_encode(['success' => false, 'message' => 'Доступ запрещен']);
+            $app->close();
+        }
+
+        // Обработка загрузки файла
+        $file = $this->input->files->get('xlsfile');
+
+        if (!$file || $file['error'] !== UPLOAD_ERR_OK) {
+            echo json_encode(['success' => false, 'message' => 'Ошибка загрузки файла']);
+            $app->close();
+        }
+
+        // Проверяем расширение файла
+        $allowedExtensions = ['xls', 'xlsx'];
+        $fileExtension = pathinfo($file['name'], PATHINFO_EXTENSION);
+        
+        if (!in_array(strtolower($fileExtension), $allowedExtensions)) {
+            echo json_encode(['success' => false, 'message' => 'Недопустимый формат файла']);
+            $app->close();
+        }
+
+        // Сохраняем файл во временную директорию
+        $tmpPath = $app->get('tmp_path') . '/' . $file['name'];
+        
+        if (!move_uploaded_file($file['tmp_name'], $tmpPath)) {
+            echo json_encode(['success' => false, 'message' => 'Ошибка сохранения файла']);
+            $app->close();
+        }
+
+        try {
+            // Получаем модель и анализируем файл
+            $model = $this->getModel('Import');
+            $result = $model->analyzeExcelFile($tmpPath);
+
+            // Удаляем временный файл
+            if (file_exists($tmpPath)) {
+                unlink($tmpPath);
+            }
+
+            // Добавляем информацию о режиме обновления цен
+            $result['updatePricesOnly'] = $updatePricesOnly;
+
+            echo json_encode(['success' => true, 'data' => $result]);
+
+        } catch (\Exception $e) {
+            // Удаляем временный файл в случае ошибки
+            if (file_exists($tmpPath)) {
+                unlink($tmpPath);
+            }
+            
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+
         $app->close();
     }
 
-    /**
-     * Полный процесс импорта
-     */
     public function fullProcess()
     {
+        // Аналогичная логика для AJAX импорта
+        $this->checkToken();
+
         $app = Factory::getApplication();
-        $input = $app->input;
+        $user = Factory::getUser();
+
+        Log::add(sprintf('FULL PROCESS: update_prices_only=%d', $updatePricesOnly), Log::DEBUG, 'com_estakadaimport');
+
+        // Получаем параметры из запроса
+        $profileId = $this->input->getInt('import_profile', 0);
+        $selectedVendorId = $this->input->getInt('selected_vendor', null);
+        $updatePricesOnly = $this->input->getBool('update_prices_only', false); // НОВЫЙ ПАРАМЕТР
         
-        // Логирование для отладки
-        Log::add('=== FULL PROCESS START ===', Log::DEBUG, 'com_estakadaimport');
-        Log::add('Profile ID from input: ' . $input->getInt('import_profile', 0), Log::DEBUG, 'com_estakadaimport');
-            
-        try {
-            // Проверяем токен
-            if (!Session::checkToken()) {
-                throw new \Exception('Неверный токен');
-            }
-            
-            $input = $app->input;
-            $file = $input->files->get('xlsfile');
-
-            $profileId = $input->getInt('import_profile', 0);
-            Log::add('Profile ID: ' . $profileId, Log::DEBUG, 'com_estakadaimport');
-                
-            if (empty($file) || $file['error'] !== UPLOAD_ERR_OK) {
-                throw new \Exception('Файл не загружен');
-            }
-            
-            // Перемещаем файл во временную директорию
-            $tmpDir = JPATH_SITE . '/tmp';
-            $tmpFilePath = $tmpDir . '/' . uniqid() . '_' . $file['name'];
-            
-            if (!move_uploaded_file($file['tmp_name'], $tmpFilePath)) {
-                throw new \Exception('Не удалось сохранить временный файл');
-            }
-            
-            // Выполняем импорт с передачей profileId
-            $model = $this->getModel('Import');
-
-            // Проверяем существование метода
-            if (!method_exists($model, 'importFromExcel')) {
-                throw new \Exception('Метод importFromExcel не найден в модели');
-            }
-            
-            Log::add('Calling importFromExcel with profileId: ' . $profileId, Log::DEBUG, 'com_estakadaimport');
-
-            $result = $model->importFromExcel($tmpFilePath, $profileId);
-            
-            // Удаляем временный файл
-            if (file_exists($tmpFilePath)) {
-                unlink($tmpFilePath);
-            }
-            
-            // Устанавливаем правильный Content-Type для JSON
-            $app->setHeader('Content-Type', 'application/json', true);
-            
-            // Если импорт завершился с ошибкой, получаем конкретное сообщение
-            if ($result) {
-                $response = [
-                    'success' => true,
-                    'message' => 'Импорт завершен успешно'
-                ];
-            } else {
-                // Получаем сообщения об ошибках из сессии
-                $messages = $app->getMessageQueue();
-                $errorMessage = 'Ошибка импорта';
-                
-                foreach ($messages as $message) {
-                    if ($message['type'] === 'error') {
-                        $errorMessage = $message['message'];
-                        break;
-                    }
-                }
-                
-                $response = [
-                    'success' => false,
-                    'message' => $errorMessage
-                ];
-            }
-            
-            echo json_encode($response);
-            
-        } catch (\Exception $e) {
-            // Устанавливаем правильный Content-Type для JSON
-            $app->setHeader('Content-Type', 'application/json', true);
-            
-            // Возвращаем оригинальное сообщение об ошибке
-            echo json_encode([
-                'success' => false,
-                'message' => $e->getMessage()
-            ]);
+        // Проверяем безопасность
+        if ($selectedVendorId && !$user->authorise('core.admin')) {
+            echo json_encode(['success' => false, 'message' => 'Доступ запрещен']);
+            $app->close();
         }
+
+        // Обработка загрузки файла
+        $file = $this->input->files->get('xlsfile');
+
+        if (!$file || $file['error'] !== UPLOAD_ERR_OK) {
+            echo json_encode(['success' => false, 'message' => 'Ошибка загрузки файла']);
+            $app->close();
+        }
+
+        $tmpPath = $app->get('tmp_path') . '/' . $file['name'];
         
+        if (!move_uploaded_file($file['tmp_name'], $tmpPath)) {
+            echo json_encode(['success' => false, 'message' => 'Ошибка сохранения файла']);
+            $app->close();
+        }
+
+        try {
+            $model = $this->getModel('Import');
+            
+            // Передаем параметр updatePricesOnly в метод импорта
+            $result = $model->importFromExcel($tmpPath, $profileId, $selectedVendorId, $updatePricesOnly);
+
+            if (file_exists($tmpPath)) {
+                unlink($tmpPath);
+            }
+
+            $message = $updatePricesOnly ? 
+                ($result ? 'Обновление цен запущено' : 'Ошибка обновления цен') : 
+                ($result ? 'Импорт запущен' : 'Ошибка импорта');
+
+            echo json_encode(['success' => $result, 'message' => $message]);
+
+        } catch (\Exception $e) {
+            if (file_exists($tmpPath)) {
+                unlink($tmpPath);
+            }
+            
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+
         $app->close();
     }
 
-    /**
-     * Получение прогресса импорта
+     /**
+     * Получение прогресса импорта для AJAX запросов
      */
     public function getProgress()
     {
         $app = Factory::getApplication();
+        
+        // Устанавливаем правильный content-type
         $app->setHeader('Content-Type', 'application/json', true);
         
         try {
+            // Проверяем авторизацию
+            $user = Factory::getUser();
+            if ($user->guest) {
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Доступ запрещен'
+                ]);
+                $app->close();
+                return;
+            }
+
+            // Получаем модель
             $model = $this->getModel('Import');
             
+            if (!$model) {
+                throw new \Exception('Модель Import не найдена');
+            }
+
+            // Проверяем существование метода в модели
             if (!method_exists($model, 'getImportProgress')) {
-                throw new \Exception('Method getImportProgress not found');
+                throw new \Exception('Метод getImportProgress не найден в модели');
             }
             
+            // Получаем прогресс из модели
             $progress = $model->getImportProgress();
             
-            // Добавим отладочную информацию
-            $debugInfo = [
-                'progress_data' => $progress,
-                'total_images_calculated' => $progress['total'] ?? 0,
-                'current_processed' => $progress['current'] ?? 0,
-                'is_complete' => isset($progress['current'], $progress['total']) && 
-                                $progress['current'] >= $progress['total'],
-                'timestamp' => time()
-            ];
+            // Логируем для отладки
+            Log::add('Progress data from model: ' . json_encode($progress), Log::DEBUG, 'com_estakadaimport');
             
-            Log::add('Progress debug: ' . json_encode($debugInfo), Log::DEBUG, 'com_estakadaimport');
-            
-            echo json_encode([
-                'success' => true,
-                'data' => $progress ?: ['current' => 0, 'total' => 0, 'currentImage' => ''],
-                'debug' => $debugInfo
-            ]);
-            
+            // Если импорт завершен
+            if (isset($progress['completed']) && $progress['completed']) {
+                echo json_encode([
+                    'success' => true,
+                    'data' => [
+                        'completed' => true,
+                        'current' => $progress['current'] ?? 0,
+                        'total' => $progress['total'] ?? 0,
+                        'currentImage' => $progress['currentImage'] ?? '',
+                        'message' => 'Импорт завершен'
+                    ]
+                ]);
+            } else {
+                // Возвращаем текущий прогресс
+                echo json_encode([
+                    'success' => true,
+                    'data' => $progress ?: [
+                        'current' => 0,
+                        'total' => 0,
+                        'currentImage' => '',
+                        'completed' => false
+                    ]
+                ]);
+            }
+
         } catch (\Exception $e) {
             Log::add('Error in getProgress: ' . $e->getMessage(), Log::ERROR, 'com_estakadaimport');
             
             echo json_encode([
                 'success' => false,
-                'message' => $e->getMessage(),
-                'data' => ['current' => 0, 'total' => 0, 'currentImage' => '']
+                'message' => 'Ошибка получения прогресса: ' . $e->getMessage(),
+                'data' => [
+                    'current' => 0,
+                    'total' => 0,
+                    'currentImage' => '',
+                    'completed' => false
+                ]
             ]);
-        }
-        
-        $app->close();
-    }
-
-    /**
-     * Очистка старых progress файлов
-     */
-    protected function cleanupOldProgressFiles()
-    {
-        try {
-            $tmpDir = JPATH_SITE . '/tmp/estakada_import';
-            if (file_exists($tmpDir)) {
-                $files = glob($tmpDir . '/progress_*.json');
-                foreach ($files as $file) {
-                    if (filemtime($file) < time() - 3600) { // older than 1 hour
-                        unlink($file);
-                        Log::add('Cleaned up old progress file: ' . $file, Log::DEBUG, 'com_estakadaimport');
-                    }
-                }
-            }
-        } catch (\Exception $e) {
-            Log::add('Error cleaning up progress files: ' . $e->getMessage(), Log::ERROR, 'com_estakadaimport');
-        }
-    }
-
-    /**
-     * Отмена импорта
-     */
-    public function cancel()
-    {
-        $app = Factory::getApplication();
-        
-        try {
-            $model = $this->getModel('Import');
-            $model->clearImportProgress();
-            
-            echo json_encode(['success' => true, 'message' => 'Импорт отменен']);
-        } catch (\Exception $e) {
-            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
         }
         
         $app->close();

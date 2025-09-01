@@ -111,6 +111,20 @@
     margin-left: 10px !important;
 }
 
+.group-profile {
+    opacity: 1;
+    height: auto;
+    transition: opacity 0.5s ease, height 0.5s ease;
+}
+
+.group-profile.hidden {
+    opacity: 0;
+    height: 0;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+}
+
 /* Стили для карточек */
 .card {
     border: 1px solid #e9ecef;
